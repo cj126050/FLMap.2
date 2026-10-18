@@ -166,7 +166,7 @@ if [ "$ROUTE_DEV" = "$IFACE" ] || [ "$ADDED" -eq 1 ]; then
     else
         FWD=0
         warn "运控不转发：$FWD_TARGET 纯超时、没有任何 ICMP 不可达"
-        dim "→ 目的不在本机的包被它静默丢弃，ip_forward 是关的"
+        dim "→ 目的不在本机的包被它静默丢弃（ip_forward=0，或 FORWARD 链 DROP）"
         dim "→ 这种情况下给拓展坞加回程路由没用，包根本过不去"
     fi
 else
@@ -235,9 +235,10 @@ elif [ "$R_CTRL" -eq 0 ] && [ "$FWD" -eq 0 ]; then
     bad "运控对 $CTRL 可达，但不转发 —— 加回程路由救不了这条路"
     dim "PC 到 $CTRL 是「本地交付」，不经过转发；去 $EDGE 的包被静默丢弃，拓展坞根本没收到"
     dim "所以先别插网线。两条出路（都要运控密码）："
-    dim "  A) 登运控开转发 + 拓展坞加回程路由（拓展坞那步仍要插一次网线）"
-    dim "     ssh $GW   →   sudo sysctl -w net.ipv4.ip_forward=1"
-    dim "  B) 直接让运控做 NAT，拓展坞完全不用动，全程无线："
+    dim "  A) 登运控开转发 + 放行 FORWARD，再给拓展坞加回程路由（拓展坞那步仍要插一次网线）"
+    dim "     ssh $GW  →  sudo sysctl -w net.ipv4.ip_forward=1  &&  sudo iptables -P FORWARD ACCEPT"
+    dim "  B) 直接让运控做 NAT，拓展坞完全不用动，全程无线（更干净）："
+    dim "     sudo sysctl -w net.ipv4.ip_forward=1"
     dim "     sudo iptables -t nat -A POSTROUTING -o eth0 -s 192.168.12.0/24 -j MASQUERADE"
 elif [ "$R_CTRL" -eq 0 ]; then
     warn "运控会转发，但拓展坞 $EDGE 不通 —— 缺的是**回程路由**"
