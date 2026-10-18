@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# =============================================================
+#  wifi_scan_report.sh —— 判定「机器狗热点到底在不在广播」
+#
+#  背景
+#  ----
+#  Unitree Go2 改过 WiFi 名称后，手机和 PC 都可能搜不到。三种可能：
+#    ① 名字没生效，还在广播出厂名（Go2_xxxxxx）
+#    ② 被设成了隐藏网络（SSID 不广播）
+#    ③ AP 根本没起来
+#  三者处置完全不同，但这个脚本能把它们分开。
+#
+#  为什么需要 sudo：扫描要发 probe request，普通用户没有 NET_ADMIN。
+#  所以必须在**你自己的终端**里跑，不能在受限的自动化环境里跑。
+#
+#  用法
+#    sudo ./scripts/wifi_scan_report.sh                    # 全量扫描并判定
+#    sudo ./scripts/wifi_scan_report.sh 13829973977        # 顺便尝试连这个隐藏名
+#
+#  只读 + 可选连接，不改任何已有网络配置（连不上会自动回滚到原来的网络）。
+# =============================================================
+set -uo pipefail
+
+TARGET_SSID="${1:-}"
+IFACE="${WIFI_IFACE:-$(iw dev 2>/dev/null | sed -n 's/^[[:space:]]*Interface \([^ ]*\)/\1/p' | head -1)}"
+PASS="${WIFI_PASS:-}"
+
+c_r=$'\033[31m'; c_g=$'\033[32m'; c_y=$'\033[33m'; c_b=$'\033[36m'; c_0=$'\033[0m'
+sec() { printf '\n%s── %s %s\n' "$c_b" "$1" "$c_0"; }
+ok()  { printf '  %s✓%s %s\n' "$c_g" "$c_0" "$1"; }
+bad() { printf '  %s✗%s %s\n' "$c_r" "$c_0" "$1"; }
+warn(){ printf '  %s!%s %s\n' "$c_y" "$c_0" "$1"; }
+
+if [ "$(id -u)" != "0" ]; then
+    bad "需要 root，请用： sudo $0 $*"
+    exit 1
+fi
+if [ -z "$IFACE" ]; then
+    bad "找不到无线接口"
+    exit 1
+fi
+
+echo "============================================================"
+echo " 无线扫描判定   接口 $IFACE   $(date '+%F %T')"
+echo "============================================================"
+
+# ---------------------------------------------------------------- 1. 触发重扫
+sec "1. 触发重扫（不断开当前连接）"
+CUR_SSID=$(iw dev "$IFACE" link 2>/dev/null | sed -n 's/^[[:space:]]*SSID: //p')
+[ -n "$CUR_SSID" ] && printf '  当前连接: %s\n' "$CUR_SSID"
+nmcli device wifi rescan 2>/dev/null || true
+sleep 5
+ok "已请求重扫"
+
+# 只有明确要求时才重置射频——那会短暂断网，可能把自己也断掉
+if [ "${DO_RESET:-0}" = "1" ]; then
+    warn "执行射频重置（会短暂断网）"
+    nmcli radio wifi off 2>/dev/null; sleep 3; nmcli radio wifi on 2>/dev/null; sleep 5
+fi
+
+# ---------------------------------------------------------------- 2. 全量扫描
+sec "2. 全量扫描（含隐藏网络）"
+SCAN=$(iw dev "$IFACE" scan 2>/dev/null)
+if [ -z "$SCAN" ]; then
+    bad "扫描失败或还没扫到任何 AP。请重跑，或确认网卡没被占用"
+    exit 1
+fi
+
+# 解析成 "信号 dBm | 频率 | BSSID | SSID" 形式
+# 注意：iw 的 BSS 行是 "BSS 24:4b:fe:0a:ce:14(on wlp132s0)"，MAC 后面粘着 "(on ..."
+printf '%s\n' "$SCAN" | awk '
+    function flush() {
+        if (have) printf "%s\t%s\t%s\t%s\n", sig, freq, mac, ssid
+    }
+    /^BSS / {
+        flush()                       # 先输出上一条，再重置
+        mac = $2; sub(/\(.*/, "", mac)
+        sig = "?"; freq = "?"; ssid = "<隐藏或空>"; have = 1
+        next
+    }
+    /signal:/       { sig = $2 }
+    /^[ \t]*freq:/  { freq = $2 }
+    /SSID:/         { sub(/^[ \t]*SSID:[ \t]*/, ""); ssid = ($0 == "" ? "<隐藏或空>" : $0) }
+    END { flush() }
+' | awk -F'\t' '$1 != "?"' | sort -k1,1nr > /tmp/wifi_scan.$$ 2>/dev/null
+
+TOTAL=$(wc -l < /tmp/wifi_scan.$$)
+printf '  扫到 %s 个 AP\n\n' "$TOTAL"
+printf '  %-8s %-8s %-19s %s\n' "信号" "频率" "BSSID" "SSID"
+printf '  %-8s %-8s %-19s %s\n' "------" "------" "-----------------" "-----------------------------"
+awk -F'\t' '{ printf "  %-8s %-8s %-19s %s\n", $1, $2, $3, $4 }' /tmp/wifi_scan.$$ | head -40
+
+# ---------------------------------------------------------------- 3. 判定
+sec "3. 判定"
+
+HIT_NAME=$(awk -F'\t' 'tolower($4) ~ /go2|unitree|1382/' /tmp/wifi_scan.$$ | head -3)
+HIDDEN=$(awk -F'\t' '$4=="<隐藏或空>" || $4==""' /tmp/wifi_scan.$$)
+STRONG=$(awk -F'\t' '$1+0 >= -55' /tmp/wifi_scan.$$ | head -5)
+
+if [ -n "$HIT_NAME" ]; then
+    ok "扫到疑似机器狗的网络："
+    printf '%s\n' "$HIT_NAME" | awk -F'\t' '{ printf "      %s dBm  %s MHz  %s\n", $1, $2, $4 }'
+    printf '    → 情况①：名字没生效或你找的不是这个。连它即可。\n'
+elif [ -n "$HIDDEN" ]; then
+    warn "扫到 ${HIDDEN:+有}不广播 SSID 的网络（可能是隐藏的机器狗热点）："
+    printf '%s\n' "$HIDDEN" | awk -F'\t' '{ printf "      %s dBm  %s MHz  %s\n", $1, $2, $3 }'
+    printf '    → 情况②：隐藏网络。需要手动添加 SSID 才能连。\n'
+elif [ -n "$STRONG" ]; then
+    warn "附近有强信号 AP，但没有隐藏 SSID 的条目："
+    printf '%s\n' "$STRONG" | awk -F'\t' '{ printf "      %s dBm  %s MHz  %s\n", $1, $2, $4 }'
+    printf '    → 这些都不是机器狗的话，说明 AP 没有在广播（情况③）。\n'
+else
+    bad "没有任何强信号 AP，也没有隐藏条目"
+    printf '    → 情况③：AP 没起来。检查是否通电足够久、是否被切成中继(STA)模式。\n'
+fi
+
+# ---------------------------------------------------------------- 4. 隐藏名直连
+if [ -n "$TARGET_SSID" ]; then
+    sec "4. 尝试直连隐藏网络 \"$TARGET_SSID\""
+    if [ -z "$PASS" ]; then
+        warn "没给密码。用法： sudo WIFI_PASS='你的密码' $0 $TARGET_SSID"
+    else
+        # 记住原来的连接，失败时回滚
+        ORIG_CONN=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null \
+                    | awk -F: -v d="$IFACE" '$2==d{print $1}' | head -1)
+        printf '  原连接: %s\n' "${ORIG_CONN:-无}"
+        if nmcli device wifi connect "$TARGET_SSID" password "$PASS" hidden yes \
+             ifname "$IFACE" 2>&1 | sed 's/^/    /'; then
+            ok "连上了！说明就是隐藏网络（情况②）"
+        else
+            bad "连不上。可能密码不对，或该 SSID 确实不存在（情况③）"
+            if [ -n "$ORIG_CONN" ]; then
+                printf '  正在回滚到 %s ...\n' "$ORIG_CONN"
+                nmcli connection up "$ORIG_CONN" >/dev/null 2>&1 && ok "已回滚" || warn "回滚失败，请手动重连"
+            fi
+        fi
+    fi
+fi
+
+rm -f /tmp/wifi_scan.$$
+echo
+echo "============================================================"
