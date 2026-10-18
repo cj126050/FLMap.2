@@ -55,7 +55,9 @@ if [ -f /etc/os-release ]; then
     echo "  系统: $NAME $VERSION_ID (内核 $(uname -r))"
     case "$VERSION_ID" in
         22.04) note "Ubuntu 版本 ($VERSION_ID)" pass ;;
-        *)     note "Ubuntu 版本 ($VERSION_ID)" warn "推荐 Ubuntu 22.04（本项目在 22.04 验证），当前 $VERSION_ID 可能需自行排查" ;;
+        # 20.04 是 Go2 拓展坞的**标准**环境（JetPack 5.1.1 只有 20.04），不是缺陷
+        20.04) note "Ubuntu 版本 ($VERSION_ID)" pass ;;
+        *)     note "Ubuntu 版本 ($VERSION_ID)" warn "本项目在 20.04(Foxy)/22.04(Humble) 验证，当前 $VERSION_ID 可能需自行排查" ;;
     esac
 else
     note "Ubuntu 版本" fail "未检测到 /etc/os-release"
@@ -137,9 +139,9 @@ else
     note "Livox-SDK2 头文件" warn "依赖 Livox-SDK2 安装"
 fi
 
-# PCL
-if [ -d /usr/include/pcl-1.12 ] || [ -d /usr/include/pcl-1.11 ]; then
-    note "PCL 开发库" pass
+# PCL（版本随发行版变：20.04→1.10，22.04→1.12，所以按前缀匹配而不是写死版本号）
+if compgen -G "/usr/include/pcl-*" > /dev/null 2>&1; then
+    note "PCL 开发库 ($(cd /usr/include && ls -d pcl-* 2>/dev/null | head -1))" pass
 else
     note "PCL 开发库" fail "缺少 libpcl-dev，请: sudo apt install libpcl-dev"
 fi

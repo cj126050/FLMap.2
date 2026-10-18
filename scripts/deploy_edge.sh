@@ -8,14 +8,21 @@
 #    这样两边互不污染，PC 端随时可以重新编译验证。
 #
 #  用法:
-#    ./scripts/deploy_edge.sh                # 同步 + 打补丁 + 编译
-#    ./scripts/deploy_edge.sh --no-build     # 只同步，不编译
-#    ./scripts/deploy_edge.sh --no-patch     # 同步 + 编译，跳过 Foxy 补丁（已打过时）
+#    ./scripts/deploy_edge.sh                 # 同步 + 打补丁 + 编译
+#    ./scripts/deploy_edge.sh --no-build      # 只同步，不编译
+#    ./scripts/deploy_edge.sh --no-patch      # 同步 + 编译，跳过 Foxy 补丁（已打过时）
+#    ./scripts/deploy_edge.sh --allow-delete  # 允许删除远端多余文件（默认拒绝）
+#    ./scripts/deploy_edge.sh --no-delete     # 只增不删，也不检查冲突
 #
 #  环境变量:
 #    EDGE_HOST  狗端 IP        默认 192.168.123.18
 #    EDGE_USER  狗端用户名      默认 unitree
 #    EDGE_WS    狗端工作空间    默认 ~/flmap_ws
+#
+#  ⚠️ 安全设计：默认**不做删除同步**。如果远端 src/ 里有本仓库没有的包
+#     （例如你自己加的 l1_bridge、私有节点），脚本会直接拒绝并列出这些包，
+#     避免一次部署把别人的工作空间清空。三种处置见报错提示。
+#     干净机器上首次部署不会触发（远端 src 为空）。
 #
 #  前置条件：已能 ssh 免密登录狗端（ssh-copy-id unitree@192.168.123.18）
 # =============================================================
@@ -26,15 +33,30 @@ EDGE_HOST="${EDGE_HOST:-192.168.123.18}"
 EDGE_USER="${EDGE_USER:-unitree}"
 EDGE_WS="${EDGE_WS:-~/flmap_ws}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SSH="ssh -o ConnectTimeout=8 -o BatchMode=yes ${EDGE_USER}@${EDGE_HOST}"
+# accept-new：首次连接自动记录主机密钥，之后强制校验（比 StrictHostKeyChecking=no 安全，
+# 又不像默认 ask 那样在 BatchMode 下直接失败——这是新机器上最常见的"免密配好了却连不上"）。
+# UserKnownHostsFile 显式指定：某些环境里 ssh 取的是 passwd 的 home（如以 root 运行但
+# HOME=/home/xxx），会和实际用户的 ~/.ssh 不一致，导致写 known_hosts 失败。
+KH_FILE="${HOME}/.ssh/known_hosts"
+mkdir -p "${HOME}/.ssh" 2>/dev/null
+SSH_OPTS=(-o ConnectTimeout=8 -o BatchMode=yes
+          -o StrictHostKeyChecking=accept-new
+          -o UserKnownHostsFile="${KH_FILE}"
+          -o ServerAliveInterval=15)
+SSH="ssh ${SSH_OPTS[*]} ${EDGE_USER}@${EDGE_HOST}"
+RSYNC_SSH="ssh ${SSH_OPTS[*]}"
 
 DO_BUILD=1
 DO_PATCH=1
+ALLOW_DELETE=0
+NO_DELETE=0
 for a in "$@"; do
     case "$a" in
         --no-build) DO_BUILD=0 ;;
         --no-patch) DO_PATCH=0 ;;
-        -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+        --allow-delete) ALLOW_DELETE=1 ;;
+        --no-delete) NO_DELETE=1 ;;
+        -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     esac
 done
 
@@ -63,10 +85,36 @@ say "同步源码 → ${EDGE_WS}"
 $SSH "mkdir -p ${EDGE_WS}" || die "无法创建远端目录"
 
 # 只同步源码与脚本；不传 build/install/log，也不传 .git（体积大且无用）
-rsync -a --delete-delay \
-    --exclude 'build/' --exclude 'install/' --exclude 'log/' \
-    --exclude '.git/' --exclude '__pycache__/' --exclude '*.pyc' \
-    --exclude '.vscode/' --exclude 'bags/' \
+EXCLUDES=(--exclude 'build/' --exclude 'install/' --exclude 'log/'
+          --exclude '.git/' --exclude '__pycache__/' --exclude '*.pyc'
+          --exclude '.vscode/' --exclude 'bags/' --exclude '.devlog/')
+
+# ---- 防误删：远端 src 里有、本仓库没有的包 → 拒绝删除同步 ----
+# 用临时文件而不是 <() 进程替换：某些沙箱环境不提供 /dev/fd
+TMPD=$(mktemp -d)
+trap 'rm -rf "$TMPD"' EXIT
+( cd "$REPO_DIR/src" 2>/dev/null && ls -d */ 2>/dev/null | tr -d '/' ) | sort > "$TMPD/local.txt"
+$SSH "cd ${EDGE_WS}/src 2>/dev/null && ls -d */ 2>/dev/null | tr -d '/'" | sort > "$TMPD/remote.txt"
+EXTRA=$(comm -13 "$TMPD/local.txt" "$TMPD/remote.txt" | grep -v '^[[:space:]]*$' || true)
+
+if [ -n "$EXTRA" ] && [ "$ALLOW_DELETE" != "1" ] && [ "$NO_DELETE" != "1" ]; then
+    warn "远端 src/ 里有本仓库不包含的包："
+    echo "$EXTRA" | sed 's/^/         /'
+    warn "默认拒绝删除。三种处理方式："
+    echo "         1) 换一个干净目录部署（推荐，彼此不干扰）："
+    echo "            EDGE_WS=~/flmap2_ws ./scripts/deploy_edge.sh"
+    echo "         2) 保留这些包继续部署（不做删除同步）："
+    echo "            ./scripts/deploy_edge.sh --no-delete"
+    echo "         3) 确认可以丢弃它们："
+    echo "            ./scripts/deploy_edge.sh --allow-delete"
+    exit 2
+fi
+
+RSYNC_DELETE=()
+[ "$ALLOW_DELETE" = "1" ] && RSYNC_DELETE=(--delete-delay)
+[ -n "$EXTRA" ] && warn "已确认，将删除远端多余包：$(echo "$EXTRA" | tr '\n' ' ')"
+
+rsync -a -e "${RSYNC_SSH}" "${RSYNC_DELETE[@]}" "${EXCLUDES[@]}" \
     "$REPO_DIR"/ "${EDGE_USER}@${EDGE_HOST}:${EDGE_WS}/" \
     || die "rsync 失败"
 ok "同步完成"

@@ -163,6 +163,24 @@ python3 tools/fake_cloud.py --points 20000 --rate 10 &
 python3 tools/bench_bridge.py --seconds 8
 ```
 
+### 实机验证（Go2 拓展坞 Orin Nano，ROS 2 Foxy + 内置 L1 雷达）
+
+上表是合成数据下的上限。以下是**真实硬件、真实点云、跨机器**跑通的结果：
+
+| 环节 | 结果 |
+|---|---|
+| 狗端 `colcon build`（6 个包，aarch64 / Foxy） | **通过，4 分 32 秒** |
+| `/cloud_registered`（FAST-LIO2 输出） | 10 Hz，LIO 残差 0.016 |
+| `/flmap/cloud`（狗端桥接 → 过网 → PC） | **5.4 Hz**，跨机收到，降采样比 34–39% |
+| `/flmap/map`（PC 累加） | 1.3 Hz，8 秒内 2 416 → 5 148 点，**持续增长** |
+
+跨机这一段是 **Foxy(Foxy 狗端) ↔ Humble(PC)** 互操作，`rmw_cyclonedds_cpp` + 同域号即可通，
+不需要额外桥接。这次测试用的是内置 L1（点少，约 130 点/帧），换成 Mid360 后点数会上来，
+带宽由 `docs/05` 的公式决定。
+
+> 未验证项：Mid360 实物（测试时雷达未接）、无线链路下的长时间稳定性。
+> 文档里凡涉及这两点的结论都标了"预期"而不是"实测"。
+
 ## 五、文档索引
 
 | 文档 | 内容 | 什么时候读 |

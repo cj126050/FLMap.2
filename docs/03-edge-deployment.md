@@ -69,6 +69,27 @@ EDGE_HOST=192.168.1.50 EDGE_USER=unitree EDGE_WS=~/flmap_ws ./scripts/deploy_edg
 
 前置：`ssh-copy-id unitree@<狗IP>` 建立免密，否则脚本第一步就退出。
 
+### 目标目录里已经有别的东西怎么办
+
+脚本默认**不做删除同步**。如果远端 `src/` 里有本仓库没有的包（你自己加的节点、
+L1 桥接之类），它会拒绝执行并把这些包列出来：
+
+```
+[warn] 远端 src/ 里有本仓库不包含的包：
+         l1_bridge
+```
+
+三种处置：
+
+| 场景 | 做法 |
+|---|---|
+| 想两个项目各自独立（推荐） | `EDGE_WS=~/flmap2_ws ./scripts/deploy_edge.sh` |
+| 保留那些包，只覆盖本仓库的文件 | `./scripts/deploy_edge.sh --no-delete` |
+| 确认可以丢弃它们 | `./scripts/deploy_edge.sh --allow-delete` |
+
+早期版本直接用 `rsync --delete` 同步到 `~/flmap_ws`，会把你手工加进工作空间的包删掉。
+这个坑是实机部署时踩出来的，所以现在做成了默认拒绝。
+
 > **不要两端共用同一份 src。** `patch_foxy.sh` 会修改 `src/` 下的源码（注释掉 Sophus、
 > 删 `pcl_ros` 依赖等），改过的树在 Humble 上仍能编，但会让 PC 端工作区"看起来脏"。
 > 本仓库的模型是：**PC 保持干净源码，狗端是打过补丁的副本**。想还原：

@@ -147,6 +147,25 @@ python3 tools/fake_cloud.py --points 20000 --rate 10 &
 python3 tools/bench_bridge.py --seconds 8
 ```
 
+### On real hardware (Go2 Orin Nano, ROS 2 Foxy, built-in L1 lidar)
+
+The table above is a synthetic upper bound. Below is what actually ran on the robot with real
+sensor data, across two machines:
+
+| Stage | Result |
+|---|---|
+| `colcon build` on the dock (6 packages, aarch64 / Foxy) | **pass, 4 min 32 s** |
+| `/cloud_registered` (FAST-LIO2 output) | 10 Hz, LIO residual 0.016 |
+| `/flmap/cloud` (edge bridge → wire → PC) | **5.4 Hz** received on the PC, 34–39 % of input points |
+| `/flmap/map` (PC accumulation) | 1.3 Hz, 2 416 → 5 148 points in 8 s, **still growing** |
+
+The cross-machine hop is **Foxy (robot) ↔ Humble (PC)** over `rmw_cyclonedds_cpp` on the same
+domain — no extra bridge needed. This run used the built-in L1 (~130 points/frame); a Mid360
+puts far more points on the wire, and `docs/05-bandwidth-tuning.md` gives the formula.
+
+> Not verified: Mid360 hardware (lidar was not connected during the test) and long-run stability
+> over Wi-Fi. Claims that depend on those are marked "expected", never "measured".
+
 ## Compatibility & honest limitations
 
 * **Cross-distro DDS.** Edge is Foxy, PC is Humble. `sensor_msgs/PointCloud2`,
