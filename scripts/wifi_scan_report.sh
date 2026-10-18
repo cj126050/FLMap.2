@@ -133,18 +133,17 @@ elif [ -n "$HIDDEN" ]; then
         [[ "$o1" =~ ^[0-9A-Fa-f]{2}$ ]] && [ $(( 16#$o1 & 2 )) -ne 0 ] && la=1
 
         note=""; cand=1
-        if [ "$la" -eq 1 ]; then
-            # ee:60:73:… 与同频段 TP-LINK_E8E3 的 ec:60:73:… 只差 "本地管理" 那一位：
-            # 这是主 AP 派生出的虚拟 BSSID（WDS/中继/访客），不是独立设备
-            note="本地管理位=1，是主 AP 派生的虚拟 BSSID"; cand=0; v="—"
+        if [ "$sigr" -lt -70 ]; then
+            note="信号 ${sigr} dBm 太弱（1 m 内应 ≥ −50）"; cand=0
+        elif [ "$la" -eq 1 ]; then
+            # 实测：Go2 自己的热点就是 7a:22:88:af:9d:29（本地管理地址）。
+            # 所以 LA 位只能说明"不是厂商 OUI"，**不能**用来排除机器狗。
+            note="本地管理地址（Go2 热点自身也用这种，不能据此排除）"; v="—"
         else
             v=$(oui_vendor "$bssid")
             case "$v" in
                 *TP-LINK*|*Hewlett*|*XIAOMI*|*Xiaomi*|*HUAWEI*|*H3C*|*Tenda*|*Ruijie*|*D-Link*|*ASUSTek*|*ZTE*|*Mercury*|*Netcore*|*Netis*|*Shenzhen*) cand=0 ;;
             esac
-            if [ "$cand" -eq 1 ] && [ "$sigr" -lt -70 ]; then
-                note="信号 ${sigr} dBm 太弱（1 m 内应 ≥ −50）"; cand=0
-            fi
         fi
 
         printf '      %s dBm  %s MHz  %s   [%s]%s\n' "$sig" "$freq" "$bssid" "$v" "${note:+  ← $note}"
