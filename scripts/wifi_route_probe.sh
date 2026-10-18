@@ -143,31 +143,42 @@ trap '[ "$ADDED" -eq 1 ] && ip route del "$DOG_NET" 2>/dev/null && echo "  （�
 
 # ------------------------------------------------ 5. 三段 ping
 sec "5. 连通性（网关 → 运控 → 拓展坞 → 雷达）"
+# ICMP 不可达 vs 纯超时，含义完全不同：
+#   "From X icmp_seq=1 Destination Host Unreachable" → X 说这地址不存在（对端没上电/没接线）
+#   纯 100% 丢包、没有任何 Unreachable          → 包送到了，只是对方回不来（回程路由问题）
 probe() {
-    local host="$1" label="$2" n line avg mdev
-    n=$(ping -c 3 -W 1 -i 0.3 "$host" 2>/dev/null | sed -n 's/.*, \([0-9]*\)% packet loss.*/\1/p')
-    if [ "${n:-100}" -eq 0 ]; then
+    local host="$1" label="$2" out loss unreach line avg mdev
+    out=$(ping -c 3 -W 1 -i 0.3 "$host" 2>&1)
+    loss=$(printf '%s' "$out" | sed -n 's/.*, \([0-9]*\)% packet loss.*/\1/p')
+    unreach=$(printf '%s' "$out" | sed -n 's/^From \([0-9.]*\).*Unreachable.*/\1/p' | sort -u | head -1)
+    if [ "${loss:-100}" -eq 0 ]; then
         line=$(ping -c 5 -W 1 -i 0.2 "$host" 2>/dev/null | tail -1)
         avg=$(printf '%s' "$line" | sed -n 's|.*= [0-9.]*/\([0-9.]*\)/.*|\1|p')
         mdev=$(printf '%s' "$line" | sed -n 's|.*/\([0-9.]*\) ms$|\1|p')
         ok "$label $host 通（avg ${avg:-?} ms，抖动 ${mdev:-?} ms）"
         return 0
     fi
-    bad "$label $host 不通（丢包 ${n:-100}%）"
+    if [ -n "$unreach" ]; then
+        bad "$label $host 不通：$unreach 回了 ICMP 不可达 → 这台设备不在（没上电 / 没插线）"
+        LAST_UNREACH="$unreach"
+    else
+        bad "$label $host 不通：纯超时、无 ICMP 不可达 → 包送到了，是对端回不来"
+    fi
     return 1
 }
+LAST_UNREACH=""
 
 # 网关永远能测：它在本地网段
-probe "$GW" "网关/热点侧"; R_GW=$?
+probe "$GW" "网关/热点侧"; R_GW=$?; U_GW="$LAST_UNREACH"
 
 # 123 段的三个地址，只有路由真正指向无线口时才有意义
 if [ "$ROUTE_DEV" != "$IFACE" ] && [ "$ADDED" -eq 0 ]; then
     warn "跳过 123 段：路由还指向 ${ROUTE_DEV}，包根本没从无线口出去，测了也不算数"
-    R_CTRL=2; R_EDGE=2; R_LIDAR=2
+    R_CTRL=2; R_EDGE=2; R_LIDAR=2; U_EDGE=""
 else
-    probe "$CTRL" "运控      "; R_CTRL=$?
-    probe "$EDGE" "拓展坞    "; R_EDGE=$?
-    probe "$LIDAR" "Mid360    "; R_LIDAR=$?
+    probe "$CTRL" "运控      "; R_CTRL=$?; U_CTRL="$LAST_UNREACH"
+    probe "$EDGE" "拓展坞    "; R_EDGE=$?; U_EDGE="$LAST_UNREACH"
+    probe "$LIDAR" "Mid360    "; R_LIDAR=$?; U_LIDAR="$LAST_UNREACH"
 fi
 
 # ------------------------------------------------ 6. 判定
@@ -181,9 +192,13 @@ elif [ "$R_EDGE" -eq 0 ]; then
     ok "方案 C 成立：走狗的 AP 能直接摸到拓展坞 $EDGE"
     dim "运控在做转发（NAT 或已有回程路由），狗端不需要任何改动"
     dim "下一步：ssh unitree@$EDGE 看能否登录，再跑 ./scripts/link_probe.sh 测带宽"
+elif [ -n "${U_EDGE:-}" ] && [ "$U_EDGE" != "$EDGE" ]; then
+    bad "拓展坞不在线：$U_EDGE 明确回了 ICMP「主机不可达」"
+    dim "这不是回程路由的问题 —— 是那台设备根本没出现在网上：没上电 / 网线没插 / 插错口"
+    dim "先确认拓展坞的指示灯（或风扇）是亮的，再来谈路由"
 elif [ "$R_CTRL" -eq 0 ]; then
-    warn "运控 $CTRL 通，但拓展坞 $EDGE 不通 —— 运控会转发，缺的是**回程路由**"
-    dim "包到达拓展坞时源地址是 $ADDR，它不知道怎么回 192.168.12.0/24，所以丢包"
+    warn "运控 $CTRL 通，但拓展坞 $EDGE 不通，且没有任何 ICMP 不可达 —— 包送到、回不来"
+    dim "→ 典型的缺回程路由：扩展坞收到源 $ADDR 的包，却不知道怎么回 192.168.12.0/24"
     dim "修法（插上网线，在拓展坞上执行一次即可，重启失效）："
     dim "  sudo ip route add 192.168.12.0/24 via $CTRL dev eth0"
     dim "注意 via 必须是 $CTRL（运控），不是 192.168.123.1 —— 那个网关是幽灵路由"
