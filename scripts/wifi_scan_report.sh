@@ -17,6 +17,8 @@
 #    sudo ./scripts/wifi_scan_report.sh                    # 全量扫描并判定
 #    sudo ./scripts/wifi_scan_report.sh 13829973977        # 顺便尝试连这个隐藏名
 #
+#  NO_OUI_LOOKUP=1 可跳过 MAC 厂商查询（离线/不想联网时用）
+#
 #  只读 + 可选连接，不改任何已有网络配置（连不上会自动回滚到原来的网络）。
 # =============================================================
 set -uo pipefail
@@ -93,26 +95,66 @@ awk -F'\t' '{ printf "  %-8s %-8s %-19s %s\n", $1, $2, $3, $4 }' /tmp/wifi_scan.
 # ---------------------------------------------------------------- 3. 判定
 sec "3. 判定"
 
-HIT_NAME=$(awk -F'\t' 'tolower($4) ~ /go2|unitree|1382/' /tmp/wifi_scan.$$ | head -3)
-HIDDEN=$(awk -F'\t' '$4=="<隐藏或空>" || $4==""' /tmp/wifi_scan.$$)
-STRONG=$(awk -F'\t' '$1+0 >= -55' /tmp/wifi_scan.$$ | head -5)
+# ③-前置：剔掉「全零 SSID」伪条目。很多路由在探测响应里塞 0x00 填充，
+# 看起来像"隐藏网络"，其实不是——不剔掉会把人往情况②带偏。
+CLEAN=/tmp/wifi_scan_clean.$$
+ZEROED=$(awk -F'\t' 'index($4,"\\x00")>0' /tmp/wifi_scan.$$ | wc -l)
+awk -F'\t' 'index($4,"\\x00")>0 {next} {print}' /tmp/wifi_scan.$$ > "$CLEAN"
+
+# 用 MAC 前缀查厂商，避免把邻居家的隐藏路由误当成机器狗。
+# 关掉：NO_OUI_LOOKUP=1 sudo ./scripts/wifi_scan_report.sh
+oui_vendor() {
+    [ -n "${NO_OUI_LOOKUP:-}" ] && { echo "?"; return; }
+    local v
+    v=$(curl -s --max-time 2 "https://api.macvendors.com/${1:0:8}" 2>/dev/null) || v=""
+    case "$v" in
+        ""|*"not found"*|*"rate limit"*|*"{"*) echo "?" ;;
+        *) echo "$v" ;;
+    esac
+}
+
+# 疑似机器狗：出厂名、Unitree 字样、或纯 11 位数字（很多人把手机号当热点名）
+HIT_NAME=$(awk -F'\t' 'tolower($4) ~ /go2|unitree/ || $4 ~ /^[0-9]{11}$/' "$CLEAN" | head -3)
+HIDDEN=$(awk -F'\t' '$4=="<隐藏或空>" || $4==""' "$CLEAN")
+STRONG=$(awk -F'\t' '$1+0 >= -55' "$CLEAN" | head -5)
 
 if [ -n "$HIT_NAME" ]; then
     ok "扫到疑似机器狗的网络："
     printf '%s\n' "$HIT_NAME" | awk -F'\t' '{ printf "      %s dBm  %s MHz  %s\n", $1, $2, $4 }'
     printf '    → 情况①：名字没生效或你找的不是这个。连它即可。\n'
 elif [ -n "$HIDDEN" ]; then
-    warn "扫到 ${HIDDEN:+有}不广播 SSID 的网络（可能是隐藏的机器狗热点）："
-    printf '%s\n' "$HIDDEN" | awk -F'\t' '{ printf "      %s dBm  %s MHz  %s\n", $1, $2, $3 }'
-    printf '    → 情况②：隐藏网络。需要手动添加 SSID 才能连。\n'
+    warn "扫到不广播 SSID 的网络，逐个查厂商："
+    SUSPECT=0
+    while IFS=$'\t' read -r sig freq bssid ssid; do
+        [ -z "${bssid:-}" ] && continue
+        v=$(oui_vendor "$bssid")
+        printf '      %s dBm  %s MHz  %s   [%s]\n' "$sig" "$freq" "$bssid" "$v"
+        case "$v" in
+            *TP-LINK*|*Hewlett*|*XIAOMI*|*Xiaomi*|*HUAWEI*|*H3C*|*Tenda*|*Ruijie*|*D-Link*|*ASUSTek*|*ZTE*|*Mercury*|*Netcore*|*Netis*|*Shenzhen*) : ;;
+            *) SUSPECT=$((SUSPECT+1)) ;;
+        esac
+    done <<< "$HIDDEN"
+
+    if [ "$SUSPECT" -eq 0 ]; then
+        bad "隐藏网络都能认出牌子，是邻居/自家的家用路由，不是机器狗"
+        printf '    → 情况③：AP 没有广播。别再去"添加隐藏网络"里试了。\n'
+        printf '       狗在 AP 模式开机约 1–2 分钟必然广播一次；长时间不见就是没起来。\n'
+    else
+        warn "有 $SUSPECT 个查不到牌子的隐藏网络，可能是狗："
+        printf '    → 对照狗底部/电池仓贴纸上的 MAC 前缀，对得上就是情况②。\n'
+        printf '    → 对不上就是情况③（AP 没起来）。\n'
+    fi
 elif [ -n "$STRONG" ]; then
     warn "附近有强信号 AP，但没有隐藏 SSID 的条目："
     printf '%s\n' "$STRONG" | awk -F'\t' '{ printf "      %s dBm  %s MHz  %s\n", $1, $2, $4 }'
-    printf '    → 这些都不是机器狗的话，说明 AP 没有在广播（情况③）。\n'
+    printf '    → 情况③：AP 没有在广播。\n'
 else
     bad "没有任何强信号 AP，也没有隐藏条目"
     printf '    → 情况③：AP 没起来。检查是否通电足够久、是否被切成中继(STA)模式。\n'
 fi
+
+[ "$ZEROED" -gt 0 ] && printf '  （已忽略 %s 条全零 SSID 的伪隐藏条目，这是路由的探测响应填充，不是隐藏网络）\n' "$ZEROED"
+rm -f "$CLEAN"
 
 # ---------------------------------------------------------------- 4. 隐藏名直连
 if [ -n "$TARGET_SSID" ]; then
