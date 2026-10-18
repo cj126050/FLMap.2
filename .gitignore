@@ -41,3 +41,6 @@ config/dds_pc.xml
 
 # Optional large upstream files (uncomment to exclude from clone)
 # src/FAST_LIO2_ROS2/Supplementary/LIVO2_supplementary.pdf
+
+# 体检/诊断日志（本地产物，不入库）
+logs/
