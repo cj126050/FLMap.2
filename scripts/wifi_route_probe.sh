@@ -141,28 +141,63 @@ fi
 
 trap '[ "$ADDED" -eq 1 ] && ip route del "$DOG_NET" 2>/dev/null && echo "  （已移除本次添加的临时路由）"' EXIT
 
+# ------------------------------------------------ 4.5 运控的转发能力
+sec "4.5 运控转发能力"
+# 关键：.161 通只能证明「运控的 eth0 地址可达」，不能证明它愿意转发别人的包。
+# 目的地址是本机时走本地交付，压根不过 ip_forward 这道门。
+# 所以拿一个 123 段里几乎肯定不存在的地址去问它：
+#   · 转发开着 → 它会真的去 eth0 上 ARP，失败后回 ICMP「主机不可达」
+#   · 没开转发 → 静默丢弃，纯超时，一个包都不回
+# 这个判定决定「给拓展坞加回程路由」到底有没有意义。
+FWD_TARGET="${FWD_TARGET:-192.168.123.254}"
+FWD=0
+if [ "$ROUTE_DEV" = "$IFACE" ] || [ "$ADDED" -eq 1 ]; then
+    fout=$(ping -c 3 -W 1 -i 0.5 "$FWD_TARGET" 2>&1)
+    funreach=$(printf '%s' "$fout" | sed -n 's/^From \([0-9.]*\).*Unreachable.*/\1/p' | sort -u | head -1)
+    floss=$(printf '%s' "$fout" | sed -n 's/.*, \([0-9]*\)% packet loss.*/\1/p')
+    if [ -n "$funreach" ]; then
+        FWD=1
+        ok "运控在转发（$funreach 对不存在的 $FWD_TARGET 回了 ICMP 不可达）"
+        dim "→ 它真的会去 eth0 上发 ARP，说明 ip_forward 是开的"
+    elif [ "${floss:-100}" -eq 0 ]; then
+        FWD=1
+        warn "$FWD_TARGET 竟然通了 —— 这个地址被占用，换一个重测"
+        dim "FWD_TARGET=192.168.123.xxx sudo ./scripts/wifi_route_probe.sh"
+    else
+        FWD=0
+        warn "运控不转发：$FWD_TARGET 纯超时、没有任何 ICMP 不可达"
+        dim "→ 目的不在本机的包被它静默丢弃，ip_forward 是关的"
+        dim "→ 这种情况下给拓展坞加回程路由没用，包根本过不去"
+    fi
+else
+    dim "跳过：路由没指向 $IFACE，测不到运控"
+fi
+
 # ------------------------------------------------ 5. 三段 ping
 sec "5. 连通性（网关 → 运控 → 拓展坞 → 雷达）"
 # ICMP 不可达 vs 纯超时，含义完全不同：
 #   "From X icmp_seq=1 Destination Host Unreachable" → X 说这地址不存在（对端没上电/没接线）
 #   纯 100% 丢包、没有任何 Unreachable          → 包送到了，只是对方回不来（回程路由问题）
 probe() {
-    local host="$1" label="$2" out loss unreach line avg mdev
+    local host="$1" label="$2" out loss unreach line avg mdev jit
     out=$(ping -c 3 -W 1 -i 0.3 "$host" 2>&1)
     loss=$(printf '%s' "$out" | sed -n 's/.*, \([0-9]*\)% packet loss.*/\1/p')
     unreach=$(printf '%s' "$out" | sed -n 's/^From \([0-9.]*\).*Unreachable.*/\1/p' | sort -u | head -1)
     if [ "${loss:-100}" -eq 0 ]; then
-        line=$(ping -c 5 -W 1 -i 0.2 "$host" 2>/dev/null | tail -1)
+        # 10 包取统计；首包已被上一轮预热，不掺 ARP 解析的延迟
+        line=$(ping -c 10 -W 1 -i 0.2 "$host" 2>/dev/null | tail -1)
         avg=$(printf '%s' "$line" | sed -n 's|.*= [0-9.]*/\([0-9.]*\)/.*|\1|p')
         mdev=$(printf '%s' "$line" | sed -n 's|.*/\([0-9.]*\) ms$|\1|p')
         ok "$label $host 通（avg ${avg:-?} ms，抖动 ${mdev:-?} ms）"
+        jit=$(awk -v m="${mdev:-0}" 'BEGIN{print (m+0>=5)?1:0}')
+        [ "$jit" -eq 1 ] && warn "    抖动 ${mdev} ms 偏大，实时点云会一顿一顿 —— 换热点信道再测"
         return 0
     fi
     if [ -n "$unreach" ]; then
         bad "$label $host 不通：$unreach 回了 ICMP 不可达 → 这台设备不在（没上电 / 没插线）"
         LAST_UNREACH="$unreach"
     else
-        bad "$label $host 不通：纯超时、无 ICMP 不可达 → 包送到了，是对端回不来"
+        bad "$label $host 不通：纯超时、无 ICMP 不可达"
     fi
     return 1
 }
@@ -196,12 +231,20 @@ elif [ -n "${U_EDGE:-}" ] && [ "$U_EDGE" != "$EDGE" ]; then
     bad "拓展坞不在线：$U_EDGE 明确回了 ICMP「主机不可达」"
     dim "这不是回程路由的问题 —— 是那台设备根本没出现在网上：没上电 / 网线没插 / 插错口"
     dim "先确认拓展坞的指示灯（或风扇）是亮的，再来谈路由"
+elif [ "$R_CTRL" -eq 0 ] && [ "$FWD" -eq 0 ]; then
+    bad "运控对 $CTRL 可达，但不转发 —— 加回程路由救不了这条路"
+    dim "PC 到 $CTRL 是「本地交付」，不经过转发；去 $EDGE 的包被静默丢弃，拓展坞根本没收到"
+    dim "所以先别插网线。两条出路（都要运控密码）："
+    dim "  A) 登运控开转发 + 拓展坞加回程路由（拓展坞那步仍要插一次网线）"
+    dim "     ssh $GW   →   sudo sysctl -w net.ipv4.ip_forward=1"
+    dim "  B) 直接让运控做 NAT，拓展坞完全不用动，全程无线："
+    dim "     sudo iptables -t nat -A POSTROUTING -o eth0 -s 192.168.12.0/24 -j MASQUERADE"
 elif [ "$R_CTRL" -eq 0 ]; then
-    warn "运控 $CTRL 通，但拓展坞 $EDGE 不通，且没有任何 ICMP 不可达 —— 包送到、回不来"
-    dim "→ 典型的缺回程路由：扩展坞收到源 $ADDR 的包，却不知道怎么回 192.168.12.0/24"
-    dim "修法（插上网线，在拓展坞上执行一次即可，重启失效）："
-    dim "  sudo ip route add 192.168.12.0/24 via $CTRL dev eth0"
-    dim "注意 via 必须是 $CTRL（运控），不是 192.168.123.1 —— 那个网关是幽灵路由"
+    warn "运控会转发，但拓展坞 $EDGE 不通 —— 缺的是**回程路由**"
+    dim "→ 包确实到了 $EDGE（它没回 ICMP 不可达，说明 ARP 通了、设备在线）"
+    dim "→ 它收到源 $ADDR 的包，却不知道怎么回 192.168.12.0/24，回包走幽灵网关 123.1 被丢"
+    dim "修法（插一次网线，在拓展坞上执行；--install 可装成开机自启）："
+    dim "  sudo ~/dog_wifi_return_route.sh --install"
 elif ! timeout 2 bash -c "echo >/dev/tcp/$GW/$GW_PORT" 2>/dev/null; then
     bad "运控 $CTRL 也不通，热点网关的 $GW_PORT 端口也不开 —— 运控只在做 AP，不转发"
     dim "这条通路到此为止：要打通必须登录运控加 NAT，而运控密码目前未知"
