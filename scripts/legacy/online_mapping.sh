@@ -20,7 +20,9 @@ for a in "$@"; do
 done
 
 source /opt/ros/humble/setup.bash
-source /home/cj/ros2_ws/install/setup.bash
+# 你原来的单机建图工作空间（按需改，或导出 ROS2_WS 指定）
+ROS2_WS="${ROS2_WS:-$HOME/ros2_ws}"
+[ -f "$ROS2_WS/install/setup.bash" ] && source "$ROS2_WS/install/setup.bash"
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export ROS_DOMAIN_ID=0
 export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/lib
