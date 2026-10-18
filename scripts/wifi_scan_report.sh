@@ -123,24 +123,40 @@ if [ -n "$HIT_NAME" ]; then
     printf '%s\n' "$HIT_NAME" | awk -F'\t' '{ printf "      %s dBm  %s MHz  %s\n", $1, $2, $4 }'
     printf '    → 情况①：名字没生效或你找的不是这个。连它即可。\n'
 elif [ -n "$HIDDEN" ]; then
-    warn "扫到不广播 SSID 的网络，逐个查厂商："
+    warn "扫到不广播 SSID 的网络，逐条过三道筛："
     SUSPECT=0
     while IFS=$'\t' read -r sig freq bssid ssid; do
         [ -z "${bssid:-}" ] && continue
-        v=$(oui_vendor "$bssid")
-        printf '      %s dBm  %s MHz  %s   [%s]\n' "$sig" "$freq" "$bssid" "$v"
-        case "$v" in
-            *TP-LINK*|*Hewlett*|*XIAOMI*|*Xiaomi*|*HUAWEI*|*H3C*|*Tenda*|*Ruijie*|*D-Link*|*ASUSTek*|*ZTE*|*Mercury*|*Netcore*|*Netis*|*Shenzhen*) : ;;
-            *) SUSPECT=$((SUSPECT+1)) ;;
-        esac
+        sigr=$(printf '%.0f' "$sig" 2>/dev/null || echo 0)
+        o1="${bssid%%:*}"
+        la=0
+        [[ "$o1" =~ ^[0-9A-Fa-f]{2}$ ]] && [ $(( 16#$o1 & 2 )) -ne 0 ] && la=1
+
+        note=""; cand=1
+        if [ "$la" -eq 1 ]; then
+            # ee:60:73:… 与同频段 TP-LINK_E8E3 的 ec:60:73:… 只差 "本地管理" 那一位：
+            # 这是主 AP 派生出的虚拟 BSSID（WDS/中继/访客），不是独立设备
+            note="本地管理位=1，是主 AP 派生的虚拟 BSSID"; cand=0; v="—"
+        else
+            v=$(oui_vendor "$bssid")
+            case "$v" in
+                *TP-LINK*|*Hewlett*|*XIAOMI*|*Xiaomi*|*HUAWEI*|*H3C*|*Tenda*|*Ruijie*|*D-Link*|*ASUSTek*|*ZTE*|*Mercury*|*Netcore*|*Netis*|*Shenzhen*) cand=0 ;;
+            esac
+            if [ "$cand" -eq 1 ] && [ "$sigr" -lt -70 ]; then
+                note="信号 ${sigr} dBm 太弱（1 m 内应 ≥ −50）"; cand=0
+            fi
+        fi
+
+        printf '      %s dBm  %s MHz  %s   [%s]%s\n' "$sig" "$freq" "$bssid" "$v" "${note:+  ← $note}"
+        [ "$cand" -eq 1 ] && SUSPECT=$((SUSPECT+1))
     done <<< "$HIDDEN"
 
     if [ "$SUSPECT" -eq 0 ]; then
-        bad "隐藏网络都能认出牌子，是邻居/自家的家用路由，不是机器狗"
-        printf '    → 情况③：AP 没有广播。别再去"添加隐藏网络"里试了。\n'
+        bad "全部排除：家用路由品牌 / 虚拟 BSSID / 信号过弱，没有一条像机器狗"
+        printf '    → 情况③：AP 根本没有广播。别再去"添加隐藏网络"里试了。\n'
         printf '       狗在 AP 模式开机约 1–2 分钟必然广播一次；长时间不见就是没起来。\n'
     else
-        warn "有 $SUSPECT 个查不到牌子的隐藏网络，可能是狗："
+        warn "有 $SUSPECT 个仍可能是狗的隐藏网络（近、且认不出牌子）："
         printf '    → 对照狗底部/电池仓贴纸上的 MAC 前缀，对得上就是情况②。\n'
         printf '    → 对不上就是情况③（AP 没起来）。\n'
     fi
