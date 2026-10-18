@@ -193,6 +193,7 @@ python3 tools/bench_bridge.py --seconds 8
 | [06-troubleshooting.md](docs/06-troubleshooting.md) | 按症状索引的排查手册 | 出问题时 |
 | [07-gap-fix.md](docs/07-gap-fix.md) | 数据断流导致的点云发散修复 | 点云突然飞走 |
 | [08-hardware.md](docs/08-hardware.md) | Mid360 接线、IP 配置、安装姿态、与内置 L1 共存 | 装雷达时 |
+| [09-wireless-link.md](docs/09-wireless-link.md) | 拓展坞没有无线射频的事实、四条通路的成本与风险、USB 网卡选芯片 | **想让狗脱离网线时** |
 
 ## 六、兼容性与已知限制
 

@@ -90,7 +90,8 @@ FLMap.2/
     ├── 05-bandwidth-tuning.md
     ├── 06-troubleshooting.md
     ├── 07-gap-fix.md        # data-stream dropout resilience
-    └── 08-hardware.md       # Mid360 mounting / wiring / IP config
+    ├── 08-hardware.md       # Mid360 mounting / wiring / IP config
+    └── 09-wireless-link.md  # the dock has no radio; four ways to add one
 ```
 
 ## Quick start
