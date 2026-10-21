@@ -77,6 +77,7 @@ FLMap.2/
 │   ├── dog_wlan_join.sh     # ★ 狗端连入热点 + 静态 10.42.0.18 + 开机自连
 │   ├── ap_chan_probe.sh     # ★ 热点扫不到时：逐个信道重开 + 从狗端验证 SSID
 │   ├── ap_watchdog.sh       # ★ 热点守护：狗端掉线自动重开 AP（rtw89 会静默丢 beacon）
+│   ├── postboot_check.sh    # ★ 重启后一条命令判断「狗端能否自己连上无线」
 │   ├── sniff_beacon.py      # ★ 物理层数 beacon（monitor 接口），判热点是否真在发
 │   ├── wifi_link_check.sh   # 四段式无线链路体检（主机/运控/狗/回程）
 │   ├── dds_bind.sh          # 按到目标的路由绑定 CycloneDDS 网卡（与链路无关）
