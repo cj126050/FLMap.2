@@ -139,9 +139,20 @@ printf '%s\n' "$OUT" | sed 's/^/     /'
 
 if printf '%s' "$OUT" | grep -q "SCAN_MISS"; then
     bad "狗端扫不到 $SSID"
-    dim "1) 确认 PC 热点还开着：iw dev $HOST_IF info | grep ssid"
-    dim "2) 信道不匹配：狗端是 2.4G-only 网卡就改 --chan=6 重开热点"
-    dim "3) 距离/天线：狗身金属壳屏蔽，把网卡天线引到开口处"
+    # 先给出狗端真实的扫描画像：能看见多少 5G / 2.4G，判断是"收不到"还是"扫不到"
+    N5=$(timeout 25 "${SSH_BASE[@]}" "sudo -n iw dev $WLAN scan 2>/dev/null | grep -c 'freq: 5' || true" 2>/dev/null)
+    N2=$(timeout 25 "${SSH_BASE[@]}" "sudo -n iw dev $WLAN scan 2>/dev/null | grep -cE 'freq: 24' || true" 2>/dev/null)
+    dim "狗端本次扫描：5G 频点 $N5 个，2.4G 频点 $N2 个"
+    if [ "${N5:-0}" -gt 0 ]; then
+        dim "→ 5G 接收正常，说明热点在该信道上没有 beacon 或信号过强被压制"
+    else
+        dim "→ 狗端一个 5G 都收不到，先查监管域： iw reg get"
+    fi
+    dim "首选处置（自动逐个信道试，并从狗端验证）："
+    dim "    sudo ./scripts/ap_chan_probe.sh"
+    dim "手动确认热点状态（注意用无线口，不是有线口）："
+    dim "    iw dev ${WIFI_IFACE:-wlp132s0} info | grep -E 'ssid|type|channel'"
+    dim "近距离饱和时把狗挪到 1.5–2 m 外，或 sudo ./scripts/ap_chan_probe.sh --tx=300"
     exit 1
 elif ! printf '%s' "$OUT" | grep -q "LINK_OK"; then
     bad "连接失败（看上面输出）"

@@ -75,6 +75,8 @@ FLMap.2/
 │   ├── pc_hotspot.sh        # ★ 主机开 5 GHz 热点（AP）
 │   ├── dog_wlan_probe.sh    # ★ 狗端网卡体检（lsusb / 驱动 / 支持模式）
 │   ├── dog_wlan_join.sh     # ★ 狗端连入热点 + 静态 10.42.0.18 + 开机自连
+│   ├── ap_chan_probe.sh     # ★ 热点扫不到时：逐个信道重开 + 从狗端验证 SSID
+│   ├── sniff_beacon.py      # ★ 物理层数 beacon（monitor 接口），判热点是否真在发
 │   ├── wifi_link_check.sh   # 四段式无线链路体检（主机/运控/狗/回程）
 │   ├── dds_bind.sh          # 按到目标的路由绑定 CycloneDDS 网卡（与链路无关）
 │   ├── pc_dds_peer.sh       # 可选：单播发现（多播被 AP 丢弃时的备手）
