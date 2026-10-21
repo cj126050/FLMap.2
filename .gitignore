@@ -44,3 +44,6 @@ config/dds_pc.xml
 
 # 体检/诊断日志（本地产物，不入库）
 logs/
+
+# 本机调试产物（DDS 配置含机器 IP，日志不入库）
+data/
