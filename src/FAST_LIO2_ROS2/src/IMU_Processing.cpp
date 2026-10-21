@@ -311,6 +311,9 @@ void ImuProcess::UndistortPcl(LidarMeasureGroup &lidar_meas, StatesGroup &state_
       auto head = v_imu[i];
       auto tail = v_imu[i + 1];
 
+      bool imu_spike = false;   // [imu-guard] 本采样是否为异常尖峰
+      double spike_g = 0.0, spike_a = 0.0;
+
       if (rclcpp::Time(tail->header.stamp).seconds() < prop_beg_time) continue;
 
       angvel_avr << 0.5 * (head->angular_velocity.x + tail->angular_velocity.x), 0.5 * (head->angular_velocity.y + tail->angular_velocity.y),
@@ -353,6 +356,57 @@ void ImuProcess::UndistortPcl(LidarMeasureGroup &lidar_meas, StatesGroup &state_
         offs_t = prop_end_time - prop_beg_time;
       }
 
+      /**** [imu-guard 2026-10-21] 陀螺/加速度异常尖峰防护 ****
+       * 现象：雷达静置桌面上时，Mid360 内置 IMU 仍会偶发输出 10~20 rad/s
+       * 的角速度（同期加速度冲到 4~6 g），且相邻 5 ms 采样的符号来回翻转。
+       * 真实刚体不可能有这种波形——5 ms 内由 -19 跳到 +9 rad/s 等效
+       * 5700 rad/s^2 的角加速度，任何被动结构都给不出这种激励。
+       * 原代码此处不做任何校验，尖峰被 Exp(angvel,dt) 直接积进姿态，单个
+       * 帧周期就能把预测甩出 20° 以上，激光匹配再从错误初值收敛，于是地图
+       * 上留下同一面墙的多层重影。
+       * 三重判据（离线用 scripts/sim_imu_guard.py 在 24 k 帧真实数据上标定）：
+       *   ① 幅值：|gyro| > 3 rad/s，|acc| > 3.5 g
+       *   ② 变化率：|Δgyro|/dt > 500 rad/s^2 —— 真实运动连续，噪声才会跳变
+       *   ③ 自适应：|gyro| > max(1.0, 6×运动基线)，静置时门槛 ≈1 rad/s，
+       *      行走时基线抬高到 0.3 左右，门槛随之到 1.8，不误伤正常转身
+       * 命中后：限幅（去畸变读 IMUpose 也安全）+ 下方暂停积分 + 膨胀协方差；
+       * 连续超阈超过 0.6 s 视为真实剧烈运动，放行限幅值继续跟随。****/
+      {
+        const double GYRO_ABS = 3.0;    // rad/s（172 °/s）
+        const double ACC_ABS = 3.5;     // 单位 g
+        const double JERK_MAX = 500.0;  // rad/s^2
+        const double ADAP_MULT = 6.0;
+        const double ADAP_FLOOR = 1.0;  // rad/s
+        const double adap = (ADAP_MULT * gyro_baseline > ADAP_FLOOR)
+                                ? ADAP_MULT * gyro_baseline
+                                : ADAP_FLOOR;
+
+        // 注意：此处 acc_avr 已在上面换算成 m/s^2，故 gate 用 G_m_s2
+        const double gate = G_m_s2;
+        spike_g = angvel_avr.norm();
+        spike_a = acc_avr.norm() / gate;
+        V3D g_meas = angvel_avr; // 限幅前的原始测量，供下一帧算变化率
+
+        double jerk = 0.0;
+        if (guard_init && dt > 1e-4) jerk = (g_meas - gyro_raw_last).norm() / dt;
+
+        imu_spike = (spike_g > GYRO_ABS) || (spike_a > ACC_ABS) ||
+                    (jerk > JERK_MAX) || (spike_g > adap);
+
+        if (!imu_spike)
+        {
+          // 只用"可信"采样更新运动基线；否则尖峰会把门槛自己顶上去（自污染）
+          gyro_baseline = 0.995 * gyro_baseline + 0.005 * spike_g;
+        }
+        else
+        {
+          if (spike_g > GYRO_ABS) angvel_avr *= GYRO_ABS / spike_g;
+          if (spike_a > ACC_ABS) acc_avr *= ACC_ABS * gate / (spike_a * gate);
+        }
+        gyro_raw_last = g_meas;
+        guard_init = true;
+      }
+
       /**** [gap-fix 2026-10-16] 数据流中断保护 ****
        * 雷达与 IMU 同时缺失（录制丢帧/传输断流）时，相邻两个 IMU 采样之间的
        * dt 会变成整段断档时长（本数据中约 1.0~1.3 s）。若照常积分，重力残差
@@ -366,6 +420,37 @@ void ImuProcess::UndistortPcl(LidarMeasureGroup &lidar_meas, StatesGroup &state_
         dt = 0.0;
         state_inout.cov.block<3, 3>(3, 3).diagonal().array() += 1.0; // 位置方差 +1 m^2
         state_inout.cov.block<3, 3>(7, 7).diagonal().array() += 4.0; // 速度方差 +4 (m/s)^2
+      }
+
+      /**** [imu-guard 2026-10-21] 尖峰期暂停姿态积分 ****
+       * dt=0 时 R_imu/pos_imu/vel_imu 全部保持，等于"这段 IMU 不采信"，
+       * 同时膨胀姿态/位置/速度协方差，让随后的激光更新主导修正。
+       * 连续超阈值 0.6 s 后放手（真实剧烈运动场景），按限幅值正常积分。****/
+      if (imu_spike)
+      {
+        spike_frames++;
+        spike_hold_time += dt;
+        if (spike_hold_time <= 0.60)
+        {
+          dt = 0.0;
+          state_inout.cov.block<3, 3>(0, 0).diagonal().array() += 0.01; // 旋转方差
+          state_inout.cov.block<3, 3>(3, 3).diagonal().array() += 1.0;  // 位置方差 m^2
+          state_inout.cov.block<3, 3>(7, 7).diagonal().array() += 4.0;  // 速度方差 (m/s)^2
+          if (spike_frames % 20 == 1)
+            printf("[IMU][guard] spike |g|=%.1f rad/s |a|=%.1fg -> hold %.2fs (n=%ld)\n",
+                   spike_g, spike_a, spike_hold_time, spike_frames);
+        }
+        else if (spike_frames % 200 == 1)
+        {
+          printf("[IMU][guard] spike persists %.2fs -> follow clamped value\n", spike_hold_time);
+        }
+      }
+      else
+      {
+        // 缓慢衰减而非直接归零：簇内偶有一两帧落回阈值以下时，
+        // 不应让保持计数重新从头累计
+        spike_hold_time -= dt * 3.0;
+        if (spike_hold_time < 0.0) spike_hold_time = 0.0;
       }
 
       dt_all += dt;

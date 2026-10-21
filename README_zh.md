@@ -83,6 +83,13 @@ FLMap.2/
 │   ├── edge_scan.sh         # PC 端一条命令：扫 N 秒 → 导 PCD → 拉回 → 校验
 │   ├── pc_view.sh           # PC 端一键远程可视化（没 GPU 时自动软件渲染）
 │   ├── pcd_preview.py       # PCD 转 PNG（不用 RViz、不用 GPU）
+│   ├── diag_bag_timing.py   # bag 时序体检：IMU 空洞 / 单帧姿态跳变
+│   ├── diag_cloud_overlap.py# 逐帧点云重叠率与主轴倾角（找"歪掉的那帧"）
+│   ├── diag_imu_raw.py      # IMU 原始体检：基线、异常簇、积分角度
+│   ├── diag_motion_truth.py # 用原始点云判定"设备到底动没动"
+│   ├── diag_pose_track.py   # 位姿轨迹摘要（区分搬动 vs 估计发散）
+│   ├── sim_imu_guard.py     # 离线标定 imu-guard 阈值（见 docs/20）
+│   ├── replay_guard_check.sh# 用真实 bag 回放验证 imu-guard 是否触发
 │   ├── clock_sync.sh        # 时间同步：PC 授时 + 狗端校准
 │   ├── link_probe.sh        # 四层链路体检（物理→网络→DDS→应用）
 │   ├── patch_foxy.sh        # Humble → Foxy 源码补丁（幂等）

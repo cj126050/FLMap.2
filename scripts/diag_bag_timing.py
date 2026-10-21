@@ -51,7 +51,13 @@ def main():
         rosbag2_py.ConverterOptions("cdr", "cdr"),
     )
     types = {t.name: t.type for t in reader.get_all_topics_and_types()}
-    msgs = {name: get_message(t) for name, t in types.items()}
+    # livox 自定义消息需要源码工作空间才能解析；本诊断只用 IMU/位姿，跳过即可
+    msgs = {}
+    for name, t in types.items():
+        try:
+            msgs[name] = get_message(t)
+        except Exception:  # noqa: BLE001
+            pass
 
     imu_t, lidar_t, lidar_n, odom = [], [], [], []
     while reader.has_next():

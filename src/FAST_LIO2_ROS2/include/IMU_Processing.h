@@ -83,6 +83,12 @@ private:
   V3D mean_gyr;
   V3D angvel_last;
   V3D acc_s_last;
+  // [imu-guard 2026-10-21] 异常采样防护状态
+  double spike_hold_time = 0.0;  // 当前连续超阈值累计时长（s）
+  long spike_frames = 0;         // 累计被拦截的采样数
+  double gyro_baseline = 0.02;   // 慢变运动基线（rad/s），用于自适应门槛
+  V3D gyro_raw_last;             // 上一帧限幅前的角速度，用于算变化率
+  bool guard_init = false;       // 基线/上一帧是否已就绪
   double last_prop_end_time;
   double time_last_scan;
   int init_iter_num = 1, MAX_INI_COUNT = 20;
