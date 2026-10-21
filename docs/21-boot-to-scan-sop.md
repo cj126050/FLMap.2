@@ -37,8 +37,8 @@ cd ~/FLMap.2 && ./scripts/pc_view.sh
 
 # ── ⑤ 录完：flmap> 里敲 stop（自动导出 PCD），再 quit
 
-# ── ⑥ 取回主机
-rsync -a --no-owner --no-group -e ssh unitree@10.42.0.18:~/bags/<时间戳> ~/Desktop/FLMap/
+# ── ⑥ 取回主机（不指定时间戳就取最新那份，自动 md5 校验）
+./scripts/fetch_bag.sh
 ```
 
 ---
@@ -238,13 +238,27 @@ PCD 已导出: /home/unitree/bags/2026-10-21_15-36-56/map.pcd
 ## 12. 阶段 K：取回主机
 
 ```bash
+./scripts/fetch_bag.sh              # 取狗端最新一份
+./scripts/fetch_bag.sh 15-36-56     # 取指定时间戳（只写后段也行）
+./scripts/fetch_bag.sh --list       # 先看狗端有哪些任务、各占多大
+```
+
+它会做完四件事：定位狗端 → 空间预检 → rsync 续传 → md5/大小双向校验，
+报告签名是四个 ✓（`map.pcd` 与 bag 各自的大小 + md5 都一致）。
+
+手敲 rsync 也行，但有两个坑：
+
+```bash
 rsync -a --no-owner --no-group -e ssh \
   unitree@10.42.0.18:~/bags/<时间戳> ~/Desktop/FLMap/
 ```
 
+- **源和目标之间必须有空格**。少了它远端路径会被拼成
+  `<时间戳>~/Desktop/FLMap`，报 `change_dir ... failed: No such file or directory (2)` —
+  看着像"狗上没数据"，其实是命令打错了
 - `--no-owner --no-group` **必须带**：目标盘不支持 chown，不带会误报 `code 23`
-- 实测 685 MB / 63 秒 / 约 11 MB/s
-- 校验：两端 `md5sum map.pcd` 应完全一致
+
+实测 685 MB / 63 秒 / 约 11 MB/s。
 
 拿到之后立刻看结果：
 
