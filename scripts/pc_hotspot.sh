@@ -33,6 +33,7 @@ PASS="flmap2026"
 CHAN=44                 # 5 GHz 非 DFS；现场 ch149 被 VGE_5 占着，ch48 被 VGE_0_5G 占着
 ADDR="10.42.0.1/24"
 DOWN=0
+RELOAD=0                # --reload：重载 rtw89 模块（固件 TX 队列卡死时）
 
 for a in "$@"; do
     case "$a" in
@@ -42,6 +43,7 @@ for a in "$@"; do
         --addr=*) ADDR="${a#*=}" ;;
         --iface=*) IFACE="${a#*=}" ;;
         --down)   DOWN=1 ;;
+        --reload) RELOAD=1 ;;
         -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
         *) echo "未知参数: $a"; exit 2 ;;
     esac
@@ -70,6 +72,27 @@ fi
 printf '%s\n' "============================================================"
 printf ' PC 热点   %s\n' "$(date '+%F %T')"
 printf '%s\n' "============================================================"
+
+# ------------------------------------------------ 0. 可选：重载驱动
+# rtw89 每次 AP 启停都会报 "timed out to flush queues"，反复启停几次后固件
+# TX 队列会卡死：AP 仍显示 type AP / carrier=1，但再也不发 beacon，重启热点
+# 也救不回来，只能重载模块。
+if [ "$RELOAD" -eq 1 ]; then
+    sec "0. 重载 rtw89 驱动"
+    nmcli connection down "$CON" 2>/dev/null
+    if modprobe -r rtw89_8922ae_git rtw89_8922a_git rtw89_pci_git 2>/dev/null; then
+        ok "已卸载 rtw89 模块"
+    else
+        warn "卸载失败（有进程占用），继续走普通重建"
+    fi
+    sleep 2
+    if modprobe rtw89_8922ae_git 2>/dev/null; then
+        ok "已重新加载 rtw89_8922ae_git"
+    else
+        bad "重新加载失败 —— 重启一次机器最稳"
+    fi
+    sleep 5
+fi
 
 # ------------------------------------------------ 1. 前置检查
 sec "1. 网卡能力"
@@ -144,6 +167,7 @@ else
         dim "5 GHz AP 起不来最常见两个原因："
         dim "  1) 监管域还是 00 → sudo iw reg set CN && sudo $0"
         dim "  2) 驱动不支持该信道的 AP → 退回 2.4G： sudo $0 --chan=6"
+        dim "  3) 反复启停后固件队列卡死 → sudo $0 --reload"
     else
         dim "看详细日志： journalctl -u NetworkManager -n 40 --no-pager"
     fi

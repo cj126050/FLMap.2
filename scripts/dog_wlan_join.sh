@@ -114,15 +114,25 @@ timeout 10 "${SSH_BASE[@]}" "iw dev $WLAN link 2>/dev/null | head -2" 2>/dev/nul
 
 # ------------------------------------------------ 3. 连热点
 sec "3. 连接热点 $SSID"
-OUT=$(timeout 90 "${SSH_BASE[@]}" "SSID='$SSID' PASS='$PASS' WLAN='$WLAN' DOGIP='$DOG_IP' PCIP='$PC_IP' bash -s" <<'EOS' 2>&1
+OUT=$(timeout 140 "${SSH_BASE[@]}" "SSID='$SSID' PASS='$PASS' WLAN='$WLAN' DOGIP='$DOG_IP' PCIP='$PC_IP' bash -s" <<'EOS' 2>&1
 set -u
 sudo nmcli device set "$WLAN" managed yes 2>/dev/null
-sudo nmcli device wifi rescan ifname "$WLAN" 2>/dev/null
-sleep 3
-if ! sudo nmcli -t -f SSID device wifi list ifname "$WLAN" 2>/dev/null | grep -qx "$SSID"; then
-    echo "SCAN_MISS"
-    exit 11
-fi
+# 热点刚起来时 beacon 可能还没发出来（NM 显示 completed 后还要 1~3 秒），
+# 而 rtw89 的 AP 在长时间无客户端时又会静默，所以不能扫一次就判死：
+# 每 4 秒重扫一次，最多 10 次（≈40 秒窗口）。
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    sudo nmcli device wifi rescan ifname "$WLAN" 2>/dev/null
+    sleep 4
+    if sudo nmcli -t -f SSID device wifi list ifname "$WLAN" 2>/dev/null | grep -qx "$SSID"; then
+        echo "SCAN_HIT 第 $i 次扫描命中"
+        break
+    fi
+    echo "SCAN_RETRY 第 $i 次未出现"
+    if [ "$i" -eq 10 ]; then
+        echo "SCAN_MISS"
+        exit 11
+    fi
+done
 sudo nmcli connection delete flmap-wifi 2>/dev/null
 sudo nmcli connection add type wifi ifname "$WLAN" con-name flmap-wifi ssid "$SSID" \
     wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASS" \

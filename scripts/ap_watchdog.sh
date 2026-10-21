@@ -39,6 +39,7 @@ LOG="/var/log/flmap-ap-watchdog.log"
 ONCE=0
 STOP=0
 PIDFILE=/run/flmap-ap-watchdog.pid
+RELOAD_AFTER=2        # 连续 N 次重启仍不恢复，就改走 --reload 重载驱动
 
 for a in "$@"; do
     case "$a" in
@@ -50,6 +51,7 @@ for a in "$@"; do
         --pass=*)     PASS="${a#*=}" ;;
         --iface=*)    IFACE="${a#*=}" ;;
         --log=*)      LOG="${a#*=}" ;;
+        --reload-after=*) RELOAD_AFTER="${a#*=}" ;;
         --once)       ONCE=1 ;;
         --stop)       STOP=1 ;;
         -h|--help)    sed -n '2,30p' "$0"; exit 0 ;;
@@ -87,8 +89,9 @@ ps_off() {
 alive() { ping -c 2 -W 1 "$EDGE" >/dev/null 2>&1; }
 
 restart_ap() {
-    log "重启热点 ch$CHAN（$SSID）"
-    "$HERE/pc_hotspot.sh" --iface="$IFACE" --ssid="$SSID" --pass="$PASS" --chan="$CHAN" \
+    local extra="${1:-}"
+    log "重启热点 ch$CHAN（$SSID）${extra:+ $extra}"
+    "$HERE/pc_hotspot.sh" --iface="$IFACE" --ssid="$SSID" --pass="$PASS" --chan="$CHAN" $extra \
         >>"$LOG" 2>&1
     ps_off || log "警告：省电仍为 on"
     sleep 12
@@ -121,6 +124,7 @@ echo $$ >"$PIDFILE"
 
 fails=0
 restarts=0
+unrec=0            # 连续"重启了但没恢复"的次数
 while :; do
     if alive; then
         if [ "$fails" -ne 0 ]; then
@@ -128,13 +132,21 @@ while :; do
             log "链路恢复"
         fi
         fails=0
+        unrec=0
     else
         fails=$((fails + 1))
         warn "$EDGE 不通（$fails/$FAILN）"
         if [ "$fails" -ge "$FAILN" ]; then
             log "连续 $fails 次不通，判定 hotspot 静默"
-            bad "判定 AP 静默 → 重启热点"
-            restart_ap
+            unrec=$((unrec + 1))
+            if [ "$unrec" -ge "$RELOAD_AFTER" ]; then
+                bad "判定 AP 静默 → 重载驱动后重开（连续 $unrec 次重启无效）"
+                restart_ap "--reload"
+                unrec=0
+            else
+                bad "判定 AP 静默 → 重启热点"
+                restart_ap
+            fi
             restarts=$((restarts + 1))
             fails=0
             if alive; then
