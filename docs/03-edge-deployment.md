@@ -62,7 +62,7 @@ rsync 源码 ──▶ 远端跑 scripts/patch_foxy.sh ──▶ 远端 colcon b
 可配置：
 
 ```bash
-EDGE_HOST=192.168.1.50 EDGE_USER=unitree EDGE_WS=~/flmap_ws ./scripts/deploy_edge.sh
+EDGE_HOST=192.168.1.50 EDGE_USER=unitree EDGE_WS=~/flmap3_ws ./scripts/deploy_edge.sh
 ./scripts/deploy_edge.sh --no-build     # 只同步
 ./scripts/deploy_edge.sh --no-patch     # 补丁已打过时
 ```
@@ -87,7 +87,7 @@ L1 桥接之类），它会拒绝执行并把这些包列出来：
 | 保留那些包，只覆盖本仓库的文件 | `./scripts/deploy_edge.sh --no-delete` |
 | 确认可以丢弃它们 | `./scripts/deploy_edge.sh --allow-delete` |
 
-早期版本直接用 `rsync --delete` 同步到 `~/flmap_ws`，会把你手工加进工作空间的包删掉。
+早期版本直接用 `rsync --delete` 同步到 `~/flmap3_ws`，会把你手工加进工作空间的包删掉。
 这个坑是实机部署时踩出来的，所以现在做成了默认拒绝。
 
 > **不要两端共用同一份 src。** `patch_foxy.sh` 会修改 `src/` 下的源码（注释掉 Sophus、
@@ -127,7 +127,7 @@ ping -c2 192.168.123.20                 # 雷达出厂 IP（已按 08 文档改�
 ip -br addr | grep 192.168.123
 
 # 3. 确认配置里的 host IP 与本机一致
-grep -A2 host_net_info ~/flmap_ws/src/livox_ros_driver2/config/MID360_config.json
+grep -A2 host_net_info ~/flmap3_ws/src/livox_ros_driver2/config/MID360_config.json
 ```
 
 `MID360_config.json` 里要改两个地方：
@@ -141,7 +141,7 @@ grep -A2 host_net_info ~/flmap_ws/src/livox_ros_driver2/config/MID360_config.jso
 
 ```bash
 ssh unitree@<狗IP>
-cd ~/flmap_ws
+cd ~/flmap3_ws
 ./scripts/edge_control.sh
 ```
 
@@ -243,7 +243,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=unitree
-WorkingDirectory=/home/unitree/flmap_ws
+WorkingDirectory=/home/unitree/flmap3_ws
 Environment=ROS_DOMAIN_ID=42
 Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ExecStartPre=/usr/bin/bash -c 'sudo /usr/sbin/nvpmodel -m 0 && sudo /usr/bin/jetson_clocks || true'

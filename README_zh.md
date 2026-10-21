@@ -123,7 +123,7 @@ git clone https://github.com/cj126050/FLMap.2.git && cd FLMap.2
 
 ```bash
 ./scripts/deploy_edge.sh
-# 可用环境变量：EDGE_HOST=192.168.1.50 EDGE_USER=unitree EDGE_WS=~/flmap_ws
+# 可用环境变量：EDGE_HOST=192.168.1.50 EDGE_USER=unitree EDGE_WS=~/flmap3_ws
 ```
 
 脚本会做三件事：rsync 源码 → 远端执行 `patch_foxy.sh` → 远端 `colcon build`。
@@ -133,7 +133,7 @@ git clone https://github.com/cj126050/FLMap.2.git && cd FLMap.2
 
 ```bash
 ssh unitree@<狗IP>
-cd ~/flmap_ws && ./scripts/edge_control.sh
+cd ~/flmap3_ws && ./scripts/edge_control.sh
 ```
 
 控制台命令：

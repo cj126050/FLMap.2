@@ -34,7 +34,7 @@ LINK_DEFAULT_HOST="10.42.0.18"
 LINK_LOCAL_PREFIX="10.42.0."
 LINK_PC_ADDR="10.42.0.1/24"
 LINK_IFACE_PAT="wl*"
-LINK_EDGE_WS="${EDGE_WS:-~/flmap_ws}"
+LINK_EDGE_WS="${EDGE_WS:-~/flmap3_ws}"
 
 # 本机的热点地址（10.42.0.x）
 link_local_addr() {
@@ -240,4 +240,10 @@ link_report_ifaces() {
     done
     [ "$wfound" = "0" ] && echo "  没有无线网口"
     return 0
+}
+
+# link 命令在控制台帮助里的描述。主脚本（edge_control.sh）两包逐字节一致，
+# 所以这条说明必须由链路层自己给 —— 否则无线包会照着有线包的话说"网口速率"。
+link_help_desc() {
+    printf '%s' "链路体检（无线信号/速率 + 到 PC/雷达的 RTT）"
 }

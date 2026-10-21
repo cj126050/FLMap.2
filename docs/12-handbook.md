@@ -40,7 +40,7 @@
 | 雷达 Mid360 | 装在狗头/背上，宇树套装是一根 M8 复合线，插上就有电 |
 | 千兆交换机 | 五口的小交换机就行，要通电 |
 | 网线 × 3 | 电脑—交换机、狗—交换机、雷达—交换机 |
-| 你的电脑 | Ubuntu 22.04，`~/FLMap.3` 这个仓库已经装好（没装见 §9） |
+| 你的电脑 | Ubuntu 22.04，`~/FLMap.2` 这个仓库已经装好（没装见 §9） |
 
 > 三根线**不分顺序**，交换机上随便哪个口都行，也不需要"交叉线"。
 > 全世界的地址都是固定好的，你不用配路由、不用改 IP。
@@ -99,7 +99,7 @@ ping -c3 192.168.123.221    # 雷达
 时间不对，地图和画面就会对不上，RViz 会疯狂刷红字。所以要电脑当"标准钟"，让狗定时来对。
 
 ```bash
-cd ~/FLMap.3
+cd ~/FLMap.2
 ./scripts/clock_sync.sh start
 ```
 
@@ -136,7 +136,7 @@ ros:foxy(1) noetic(2) ?
 然后：
 
 ```bash
-cd ~/flmap_ws
+cd ~/flmap3_ws
 ./scripts/edge_control.sh
 ```
 
@@ -160,7 +160,7 @@ flmap>
 再新开一个终端（**不要关 A**）：
 
 ```bash
-cd ~/FLMap.3
+cd ~/FLMap.2
 ./scripts/pc_view.sh
 ```
 
@@ -280,7 +280,7 @@ flmap> quit          # 关程序
 
 # ② 窗口 C：按 Ctrl-C 退出看图
 # ③ 窗口 A：停掉对表服务
-cd ~/FLMap.3 && ./scripts/clock_sync.sh stop
+cd ~/FLMap.2 && ./scripts/clock_sync.sh stop
 
 # ④ 狗端（还在 ssh 里）
 sudo poweroff        # 密码 123；等风扇停、灯灭，约 20 秒
@@ -297,7 +297,7 @@ sudo poweroff        # 密码 123；等风扇停、灯灭，约 20 秒
 > **如果 `stop` 提示"PCD 导出失败"**：先别重扫。录像还在，直接重新转：
 >
 > ```bash
-> cd ~/flmap_ws
+> cd ~/flmap3_ws
 > /usr/bin/python3 scripts/bag_to_pcd.py ~/bags/<那个文件夹>/scan ~/bags/<那个文件夹>/map.pcd
 > ```
 
@@ -317,12 +317,12 @@ sudo poweroff        # 密码 123；等风扇停、灯灭，约 20 秒
 | RViz 一片空白，但有数据 | 电脑上有第二个网卡抢了流量 | `ip route get 192.168.123.18`，看是不是走了 WiFi |
 | 画面里点挤成一小团 / 飞到天上 | 点云数据格式坏了（少见） | 跑 `./tools/diag/run_bridge_selftest.sh -n 5000`，期望 `5000/5000` |
 | RViz 报 `GLXContext` 打不开 | 电脑显卡驱动 / 远程桌面没有图形加速 | 用 `./scripts/pc_view.sh --headless` 只收数据，或本机直接开 |
-| 想不起来哪一步没做 | —— | 跑 `cd ~/FLMap.3 && ./scripts/link_probe.sh`，它会逐层告诉你断在哪 |
+| 想不起来哪一步没做 | —— | 跑 `cd ~/FLMap.2 && ./scripts/link_probe.sh`，它会逐层告诉你断在哪 |
 
 一条命令做全面体检（连不上、看不明白时先跑这个）：
 
 ```bash
-cd ~/FLMap.3 && ./scripts/link_probe.sh
+cd ~/FLMap.2 && ./scripts/link_probe.sh
 ```
 
 它按"网线 → 延迟 → SSH → 数据发现 → 点云 → 带宽"六层往下查，红在哪一层就是哪一层的问题。
@@ -337,7 +337,7 @@ cd ~/FLMap.3 && ./scripts/link_probe.sh
 换电脑、重装系统、或者第一次在这台机器上跑，才需要做这些。做过一次就永远不用再管。
 
 ```bash
-cd ~/FLMap.3
+cd ~/FLMap.2
 ./setup.sh                      # 编译，约 5 分钟，末尾要看到 "编译完成"
 
 # 给电脑网口配固定地址（只做一次）
@@ -387,7 +387,7 @@ sudo nmcli connection up go2-wired
 
 ```bash
 # 现在能不能跑？—— 六层体检
-cd ~/FLMap.3 && ./scripts/link_probe.sh
+cd ~/FLMap.2 && ./scripts/link_probe.sh
 
 # 随便看一眼现在的数据正不正常
 python3 tools/diag/cloud_stat.py -t /flmap/cloud -n 1

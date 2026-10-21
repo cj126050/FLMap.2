@@ -15,7 +15,7 @@
 #    pause   暂停录包        resume 继续录包
 #    stop    停止录包并导出 PCD
 #    status  进程 / 话题 / 流量状态
-#    link    链路体检（网口速率、carrier、到 PC 的 RTT）
+#    link    链路体检（网口/无线状态 + 到 PC 的 RTT）
 #    stats   bridge 输出频率与点数
 #    quit    退出（先 stop，再关节点）
 #
@@ -335,13 +335,17 @@ do_quit() {
 }
 
 do_help() {
+    # 这条说明由链路层给：有线包讲网口速率，无线包讲信号/速率。
+    # 本脚本两包同一份，不许在这里写死任何一边的说法。
+    local ldesc="链路体检（网口状态 + 到 PC/雷达的 RTT）"
+    declare -F link_help_desc >/dev/null 2>&1 && ldesc=$(link_help_desc)
     cat <<EOF
   start   开始新扫描（首次会问是否体检）
   pause   暂停录包       resume 继续录包
   stop    停止录包 + 导出 PCD
   status  进程/话题/硬件
   stats   bridge 输出频率与压缩比
-  link    链路体检（网口速率 + 到 PC/雷达的 RTT）
+  link    ${ldesc}
   env     手动跑一次环境体检
   quit    退出（自动 stop + 关节点）
 EOF

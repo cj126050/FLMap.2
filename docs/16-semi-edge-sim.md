@@ -216,7 +216,7 @@ ns-train splatfacto --data data/<ts> --pipeline.model.random-init False \
 ### 4.1 L0：本仓库合成数据（已跑通）
 
 ```bash
-cd ~/FLMap.3
+cd ~/FLMap.2
 ./tools/sim/run_sim.sh data/sim 120
 ```
 

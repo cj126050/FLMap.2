@@ -230,7 +230,7 @@ ros2 param get /fastlio2_mapping use_sim_time     # 实时跑必须是 false
 
 | 报错 | 原因 | 处置 |
 |---|---|---|
-| `Could not find a package configuration file provided by "sophus"` | 没打 Foxy 补丁 | `bash scripts/patch_foxy.sh ~/flmap_ws` |
+| `Could not find a package configuration file provided by "sophus"` | 没打 Foxy 补丁 | `bash scripts/patch_foxy.sh ~/flmap3_ws` |
 | `pcl_ros` 找不到 | Foxy 上包名不同 | 同上（补丁会删这个依赖） |
 | `tf2_geometry_msgs.hpp: No such file` | Humble 才有的文件名 | 同上 |
 | `undefined symbol: _ZN3tbb...` / PCL 链接错误 | Foxy 不传递 PCL/Boost 依赖 | 同上（补丁会插入显式链接块） |
@@ -365,7 +365,7 @@ ModuleNotFoundError: No module named 'rosbag2_py'   ← 绑定却是缺的
 2. **bag 不用重录**，直接重导：
 
 ```bash
-cd ~/flmap_ws
+cd ~/flmap3_ws
 /usr/bin/python3 scripts/bag_to_pcd.py ~/bags/2026-10-19_13-52-32/scan \
                                         ~/bags/2026-10-19_13-52-32/map.pcd
 ```
@@ -437,7 +437,7 @@ pname="gnome-control-center" pid=2058406 uid=1000 result="success"
 ### 处置
 
 ```bash
-cd ~/FLMap.3 && ./scripts/pc_net_fix.sh
+cd ~/FLMap.2 && ./scripts/pc_net_fix.sh
 ```
 
 脚本会：检查 carrier → 复用或重建 `go2-wired`（静态 `192.168.123.10/24`、不设网关、

@@ -6,7 +6,7 @@
 # PC 端保持 Humble 干净源码；deploy_edge.sh 会在远端自动调用它。
 #
 # 用法: ./patch_foxy.sh <工作空间目录>
-#   例: ./patch_foxy.sh ~/flmap_ws
+#   例: ./patch_foxy.sh ~/flmap3_ws
 #
 # 改了什么（都是最小改动，不动算法）:
 #   1. fast_lio2/include/common_lib.h   去掉 sophus/se3.h（Foxy 上没有这个包，

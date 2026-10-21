@@ -75,11 +75,11 @@ flmap> quit
 ./scripts/edge_control.sh: line 74: 8075 Killed  ros2 launch go2_fastlio ...
 ./scripts/edge_control.sh: line 74: 8094 Killed  ros2 run flmap_bridge ...
 已退出
-unitree@ubuntu:~/flmap_ws$
+unitree@ubuntu:~/flmap3_ws$
 ```
 
 **`Killed` 不是错误**，是脚本在停进程，正常现象。看到提示符回到
-`unitree@ubuntu:~/flmap_ws$` 就对了。
+`unitree@ubuntu:~/flmap3_ws$` 就对了。
 
 > 如果这时 `stop` 还没做，`quit` 会**自动先 `stop`** 再关节点。所以赶时间的话，
 > 直接 `quit` 也算保住了地图。
@@ -153,7 +153,7 @@ sudo poweroff       # 密码 123（宇树默认）
 
 ```bash
 ssh unitree@192.168.123.18     # 输 1
-cd ~/flmap_ws && ./scripts/edge_control.sh
+cd ~/flmap3_ws && ./scripts/edge_control.sh
 # 出现 flmap> 后，脚本会自动检测并清理上次残留的节点
 flmap> status
 flmap> stop        # 把断连期间录的内容也存下来
@@ -206,7 +206,7 @@ print('消息数:', c.execute('select count(*) from messages').fetchone()[0])
 正常 `stop` 会生成，硬断电时可能没有。导出脚本会自己往下找 `*.db3`：
 
 ```bash
-cd ~/flmap_ws
+cd ~/flmap3_ws
 /usr/bin/python3 scripts/bag_to_pcd.py ~/bags/<ts> ~/bags/<ts>/map.pcd
 ```
 
@@ -235,21 +235,21 @@ PC 不在就是空拉一次，之后每 30 秒重试，也不致命，但日志�
 
 ```bash
 # ① PC
-cd ~/FLMap.3 && ./scripts/clock_sync.sh start
+cd ~/FLMap.2 && ./scripts/clock_sync.sh start
 
 # ② 狗上电池开关 → 等 30 秒（Orin 启动 + 驱动加载）
 
 # ③ PC，另开窗口
 ping -c3 192.168.123.18            # 通了再往下
 ssh unitree@192.168.123.18         # 输 1
-cd ~/flmap_ws && ./scripts/edge_control.sh
+cd ~/flmap3_ws && ./scripts/edge_control.sh
 
 # ④ flmap> 里
 flmap> start
 flmap> status                      # 三个话题频率都该是 7–10 Hz
 
 # ⑤ PC，第三个窗口
-cd ~/FLMap.3 && ./scripts/pc_view.sh
+cd ~/FLMap.2 && ./scripts/pc_view.sh
 ```
 
 `start` 之后如果 `status` 显示频率是 1–2 Hz，先别扫，看
@@ -261,7 +261,7 @@ cd ~/FLMap.3 && ./scripts/pc_view.sh
 
 ```
 □ 窗口 B:  stop          → 看到 "PCD 已导出: .../map.pcd"
-□ 窗口 B:  quit          → 看到提示符回到 unitree@ubuntu:~/flmap_ws$
+□ 窗口 B:  quit          → 看到提示符回到 unitree@ubuntu:~/flmap3_ws$
 □ 窗口 C:  Ctrl-C
 □ 窗口 A:  ./scripts/clock_sync.sh stop
 □ 狗 ssh:  sync

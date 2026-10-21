@@ -83,7 +83,7 @@ AP 和手机 App 的图传共用一个射频模块，抖动 40 ms 起步。
 PC 的 `enp131s0` → 拓展坞**朝外**那个 RJ45（不是狗身内部的口）。
 
 ```bash
-cd ~/FLMap.3
+cd ~/FLMap.2
 sudo ./scripts/dog_wlan_probe.sh
 ```
 

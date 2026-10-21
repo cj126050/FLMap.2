@@ -141,7 +141,7 @@ git clone https://github.com/cj126050/FLMap.2.git && cd FLMap.2
 
 ```bash
 ssh unitree@<edge-ip>
-cd ~/flmap_ws && ./scripts/edge_control.sh
+cd ~/flmap3_ws && ./scripts/edge_control.sh
 flmap> start
 ```
 

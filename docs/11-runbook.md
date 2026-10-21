@@ -10,10 +10,11 @@
 
 | 角色 | 地址 | 说明 |
 |---|---|---|
-| PC 有线口 | `192.168.123.10/24` | `enp131s0`，**不设默认网关** |
-| Go2 拓展坞 | `192.168.123.18` | SSH 用户 `unitree`，建图跑在这上面 |
-| 运控 | `192.168.123.161` | 只用来确认狗活着 |
-| Mid360 | `192.168.123.221` | 由狗端供电，随狗上电 |
+| PC 无线口（热点） | `10.42.0.1/24` | `wlp132s0`，SSID `FLMap3`，`pc_hotspot.sh` 创建 |
+| Go2 无线口 | `10.42.0.18/24` | SSH 用户 `unitree`，建图跑在这上面 |
+| Go2 有线口（内部） | `192.168.123.18` | 狗上 `eth0`，PC 不直连，只经狗转发 |
+| 运控 | `192.168.123.161` | 狗内部网段，只用来确认狗活着 |
+| Mid360 | `192.168.123.221` | 狗内部网段，由狗端供电，随狗上电 |
 | ROS 域 | `ROS_DOMAIN_ID=42` | 避开宇树自用的 0 域，脚本已内置 |
 | RMW | `rmw_cyclonedds_cpp` | 两端必须相同，脚本已内置 |
 
@@ -22,16 +23,19 @@
 ## 0. 最短路径（已经配好过、只想再建一次图）
 
 ```bash
-# 终端 A（PC）    起授时，常驻
-cd ~/FLMap.3 && ./scripts/clock_sync.sh start
+# 终端 A（PC）    先开热点，再起授时（热点不会开机自启，每次都要跑）
+cd ~/FLMap.2
+sudo ./scripts/pc_hotspot.sh
+./scripts/link_probe.sh                 # 四段全绿再往下
+./scripts/clock_sync.sh start           # 常驻
 
 # 终端 B（狗端）  进控制台，看到 10 Hz 后敲 start
-ssh unitree@192.168.123.18          # 登录后问 ros:foxy(1) noetic(2) ? → 输入 1
-cd ~/flmap_ws && ./scripts/edge_control.sh
+ssh unitree@10.42.0.18          # 登录后问 ros:foxy(1) noetic(2) ? → 输入 1
+cd ~/flmap3_ws && ./scripts/edge_control.sh
 #   flmap> start
 
 # 终端 C（PC）    出图
-cd ~/FLMap.3 && ./scripts/pc_view.sh
+cd ~/FLMap.2 && ./scripts/pc_view.sh
 ```
 
 收工：终端 B `stop` → `quit`，终端 C `Ctrl-C`。
@@ -47,88 +51,103 @@ cd ~/FLMap.3 && ./scripts/pc_view.sh
 一条命令判断"现在能不能直接开跑"：
 
 ```bash
-cd ~/FLMap.3 && ./scripts/link_probe.sh
+cd ~/FLMap.2 && ./scripts/link_probe.sh
 ```
 
 末尾出现「链路健康，直接 ./scripts/pc_view.sh」就跳 §3；有红项看 §6。
 
 ---
 
-## 1. 上电前：接线与顺序
+## 1. 上电前：连接方式与顺序
+
+**无线链路，没有网线。**
 
 ```
-        ┌──────────── 千兆交换机 ────────────┐
-        │              │                    │
-   PC enp131s0     拓展坞 RJ45 #2        Mid360 RJ45
-   192.168.123.10  192.168.123.18       192.168.123.221
-                        │
-                   Go2 运控 .161（内部链路）
+   PC wlp132s0 (AP)  ═══ 5 GHz ch44 ═══  Go2 wlan0 (STA)
+      10.42.0.1                            10.42.0.18
+                                                │
+                                     拓展坞 eth0 192.168.123.18
+                                                ├── Mid360 192.168.123.221
+                                                └── 运控 .161（内部链路）
 ```
 
-三根网线，全部 `192.168.123.0/24`，**不需要任何路由配置**。
+PC 与狗之间只有一条 5 GHz 无线；狗内部仍是原来的 `192.168.123.0/24`，PC 不参与这一段，
+要访问雷达/运控只能经狗转发。
 
 上电顺序（有讲究，别反）：
 
-1. 交换机通电。
-2. 插好三根网线（PC、拓展坞、雷达）。
-3. 狗上电（电池开机），等 40–60 秒。
-   - 宇树套装（M8 复合线）：雷达由这根线供电，**跟着狗一起醒**，不用单独上电。
-   - 零售版（M12 + XT30 裸线）：雷达电源独立，记得**先把 12 V 接上**再指望 ping 通。
-4. PC 上 `ping` 三个地址。
+1. **PC 先开热点**（`sudo ./scripts/pc_hotspot.sh`）。热点不开机自启，每次都要手动跑。
+2. 狗上电（电池开机），等 20–40 秒。狗端 `wlan0` 会自动连 `FLMap3`。
+3. PC 上 `ping` 一次狗：
 
 ```bash
-ping -c3 192.168.123.18     # 拓展坞，最先通
-ping -c3 192.168.123.161    # 运控（可选）
-ping -c3 192.168.123.221    # 雷达，通常比拓展坞慢几秒
+ping -c3 10.42.0.18
 ```
 
-**检查点**：三个都通，RTT 都在 1 ms 内。
+**检查点**：3 个包全收，RTT 在 1 ms 级。
 
 ```
 3 packets transmitted, 3 received, 0% packet loss
 rtt min/avg/max/mdev = 0.42/0.55/0.71/0.08 ms
 ```
 
-> 雷达 ping 不通但拓展坞通？八成是雷达没上电（狗端 M8 没插好），或 IP 不是 `.221`。
-> 见 [08-hardware.md](08-hardware.md)。
+> 雷达/运控**不要从 PC 直接 ping**。它们在狗的 `eth0` 后面，能不能转发取决于狗端配置，
+> 与建图无关。要确认它们活着，进 `flmap>` 敲 `link`，那是从狗端看的。
+>
+> 无线起不来（狗找不到热点 / 连上没地址）见 [17-wireless-link.md](17-wireless-link.md)。
 
 ---
 
 ## 2. 一次性配置（只在新机器 / 重装后做）
 
-### 2.1 PC 有线口
+### 2.1 PC 热点（无线链路唯一要准备的东西）
 
-一条命令就够（推荐，幂等，可反复跑）：
-
-```bash
-cd ~/FLMap.3 && ./scripts/pc_net_fix.sh
-```
-
-它做四件事：检查 carrier → 建/校正 `go2-wired`（静态地址、不设网关、
-`autoconnect-priority 100`）→ 关掉其它以太网配置的自动连接 → ping 三个目标验证。
-
-手工等价操作：
+一条命令就够（幂等，可反复跑）：
 
 ```bash
-# 只在第一次执行；con-name 已存在会报错，忽略即可
-sudo nmcli connection add type ethernet ifname enp131s0 con-name go2-wired \
-    ipv4.method manual ipv4.addresses 192.168.123.10/24 \
-    ipv4.gateway "" ipv4.dns ""
-sudo nmcli connection up go2-wired
-ip -br addr show enp131s0        # 期望 192.168.123.10/24
+cd ~/FLMap.2 && sudo ./scripts/pc_hotspot.sh
 ```
 
-> **不要设默认网关。** 设了之后 PC 的所有出网流量都会往狗身上撞，表现为"能 ping 狗，
-> 但浏览器打不开网页"。原因见 [02-network-and-dds.md](02-network-and-dds.md) §3.3。
+它做五件事：查网卡的 AP 能力 → 设监管域 `CN`（不设的话 5 GHz 全被内核禁掉，
+AP 起不来，原因见 [17-wireless-link.md](17-wireless-link.md)）→ 建/启用 `flmap-ap`
+（`mode ap`、ch44、WPA2、`ipv4.method shared`）→ 起 AP → 补一条 `239.255.0.1/32`
+的多播路由，让 DDS 发现包从无线口出去。
+
+成功的样子：
+
+```
+✓ 热点已启动（a / ch44）
+wlp132s0   10.42.0.1/24
+SSID       FLMap3      密码 flmap2026
+```
+
+手工等价操作（**不推荐**，监管域那步最容易漏）：
+
+```bash
+sudo iw reg set CN
+sudo nmcli connection add type wifi ifname wlp132s0 con-name flmap-ap \
+    autoconnect no 802-11-wireless.mode ap 802-11-wireless.band a \
+    802-11-wireless.channel 44 \
+    802-11-wireless.ssid FLMap3 \
+    802-11-wireless-security.key-mgmt wpa-psk \
+    802-11-wireless-security.psk flmap2026 \
+    ipv4.method shared
+sudo nmcli connection up flmap-ap
+ip -br addr show wlp132s0        # 期望 10.42.0.1/24
+```
+
+> **`ipv4.method shared` 会自动给 PC 自己配 `10.42.0.1` 并做 NAT**，所以手机网卡那条
+> 默认路由照常出网 —— 这点和有线的静态地址不同，不用手工留空网关。
 >
-> **配好后不要在「设置 → 网络」里删掉这个有线连接。** 删了就等于把 IP 删了，
-> 表现为"网线好好的但全部 ping 不通"，排查过程见
-> [06-troubleshooting.md §8.4](06-troubleshooting.md#84-有线口有链路但没-ip)。
+> 收工要关：`sudo ./scripts/pc_hotspot.sh --down`。热点**不会开机自启**
+> （`autoconnect no` 是故意的），每次开机都得手动跑一次。
+>
+> `pc_net_fix.sh` 是用来配有线口的（`192.168.123.10`），**无线链路下不需要它**。
 
 ### 2.2 PC 端编译
 
 ```bash
-cd ~/FLMap.3
+cd ~/FLMap.2
 ./setup.sh                       # 首次约 4–5 分钟
 ```
 
@@ -169,7 +188,7 @@ RTT 1.3–1.7 ms）。这个量级对 LIO 融合和 RViz 都完全没有影响 �
 
 ```bash
 # 可选：确认狗端装好了
-ssh unitree@192.168.123.18 'ls ~/flmap_ws/install/setup.bash'
+ssh unitree@10.42.0.18 'ls ~/flmap3_ws/install/setup.bash'
 ```
 
 > 只改了狗端代码时，可以只同步+编译，不重新打补丁：
@@ -182,14 +201,14 @@ ssh unitree@192.168.123.18 'ls ~/flmap_ws/install/setup.bash'
 ### 终端 A —— PC：时间基准
 
 ```bash
-cd ~/FLMap.3
+cd ~/FLMap.2
 ./scripts/clock_sync.sh start      # 已在跑会提示"已在运行"，无害
 ```
 
 **检查点**：出现 `[ ok ]` 开头的一行即可，三种都算正常：
 
 ```
-[ ok ] 授时服务已启动: http://192.168.123.10:8000/time     ← 本次拉起
+[ ok ] 授时服务已启动: http://10.42.0.1:8000/time     ← 本次拉起
 [ ok ] 授时服务已在运行 (pid 12345)                        ← 之前拉起的
 [ ok ] 端口 8000 上已有授时服务在响应 —— 直接复用           ← 脚本会探一下 /time 再认
 ```
@@ -201,9 +220,9 @@ cd ~/FLMap.3
 ### 终端 B —— 狗端：起建图
 
 ```bash
-ssh unitree@192.168.123.18
+ssh unitree@10.42.0.18
 #   登录后会先问一句：ros:foxy(1) noetic(2) ?   →  输入 1 回车
-cd ~/flmap_ws
+cd ~/flmap3_ws
 ./scripts/edge_control.sh
 ```
 
@@ -256,7 +275,7 @@ flmap_bridge: /cloud_registered -> /flmap/cloud | voxel 0.10 m | <= 10.0 Hz (tol
 ### 终端 C —— PC：看图
 
 ```bash
-cd ~/FLMap.3
+cd ~/FLMap.2
 ./scripts/pc_view.sh
 ```
 
@@ -288,7 +307,7 @@ flmap> resume       # 继续录
 flmap> stop         # 停止录包 + 自动导出 PCD
 flmap> status       # 进程 / 话题频率 / 温度 / 内存
 flmap> stats        # bridge 压缩比与输出频率
-flmap> link         # 有线链路体检（网口速率 + 到 PC/雷达 RTT）
+flmap> link         # 链路体检（无线信号/速率 + 到 PC/雷达 RTT）
 flmap> quit         # 退出（会自动先 stop）
 ```
 
@@ -332,7 +351,7 @@ PC 端：终端 C `Ctrl-C` 结束 `pc_view.sh`。
 重导一次就行（详见 [06 §8.3](06-troubleshooting.md#83-stop--quit-之后-pcd-导出失败)）：
 
 ```bash
-cd ~/flmap_ws
+cd ~/flmap3_ws
 /usr/bin/python3 scripts/bag_to_pcd.py ~/bags/<目录>/scan ~/bags/<目录>/map.pcd
 ```
 
@@ -341,7 +360,7 @@ cd ~/flmap_ws
 拷回 PC（千兆，几十 MB 一两秒）：
 
 ```bash
-scp -r unitree@192.168.123.18:~/bags/2026-10-19_14-30-00 ~/bags/   # 换成实际目录名
+scp -r unitree@10.42.0.18:~/bags/2026-10-19_14-30-00 ~/bags/   # 换成实际目录名
 ```
 
 ### 4.1 整机断电重启（换场景 / 收工带回家）
@@ -376,7 +395,7 @@ date                                    # ① 时间对不对
 /usr/local/bin/go2-clock status | tail -3   # ② 校时是否已生效
 
 # PC 端
-cd ~/FLMap.3 && ./scripts/link_probe.sh     # ③ 四层链路是否恢复
+cd ~/FLMap.2 && ./scripts/link_probe.sh     # ③ 四层链路是否恢复
 ```
 
 **时钟注意**：Orin 断电后没有电池保时，重启会回到镜像构建的日期。只要 PC 的
@@ -416,16 +435,16 @@ export ROS_DOMAIN_ID=42 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_LOCALHOST_ONLY
 
 ```bash
 # ① 链路：脚本一次跑完 6 节（网络/时延/SSH/DDS/点云/带宽）
-cd ~/FLMap.3 && ./scripts/link_probe.sh
+cd ~/FLMap.2 && ./scripts/link_probe.sh
 
 # ② 狗端：驱动在不在、点云有没有、bridge 什么参数
-ssh unitree@192.168.123.18 'pgrep -af "livox_ros|fastlio2|flmap_bridge"'
+ssh unitree@10.42.0.18 'pgrep -af "livox_ros|fastlio2|flmap_bridge"'
 
 # ③ 话题：狗端本机 vs PC 端，两边频率是否一致
 ros2 topic hz /flmap/cloud
 
 # ④ 数据本身：数值分布对不对（不是"有没有数据"）
-cd ~/FLMap.3 && python3 tools/diag/cloud_stat.py -t /flmap/cloud -n 1
+cd ~/FLMap.2 && python3 tools/diag/cloud_stat.py -t /flmap/cloud -n 1
 ```
 
 ④ 的正常长相（实测）：
@@ -448,30 +467,36 @@ cd ~/FLMap.3 && python3 tools/diag/cloud_stat.py -t /flmap/cloud -n 1
 
 > 完整版在 [06-troubleshooting.md](06-troubleshooting.md)，这里只放现场最常撞的七种。
 
-### 6.1 `ping` 不通拓展坞
+### 6.1 `ping` 不通 `10.42.0.18`
+
+按「热点在不在 → 狗连上没有 → 地址对不对」三层查，每层一条命令：
 
 ```bash
-ip -br addr show enp131s0              # 有没有 192.168.123.10？
-cat /sys/class/net/enp131s0/carrier    # 必须是 1
-cat /sys/class/net/enp131s0/speed      # 必须是 1000
+# ① 热点起没起
+ip -br addr show wlp132s0                    # 有没有 10.42.0.1/24？
+iw dev wlp132s0 info | grep -E "type|channel"   # type 必须是 AP，channel 44
+
+# ② 狗连上没有（AP 视角，看客户端数）
+iw dev wlp132s0 station dump | grep -c "^Station"   # 0 = 狗没连上
 ```
 
-- `carrier=0` → 网线 / 交换机口 / 狗没开机。换线换口。
-- `carrier=1` `speed=1000` **但没有 IP**（三个目标全 100% 丢包，和"狗没开机"一模一样）
-  → 十有八九是**保存 `192.168.123.10` 的那个连接配置被删了**。在「设置 → 网络」里
-  点了删除/忘记、或 `nmcli con delete`，都会这样：NetworkManager 随即自动建一条
-  走 DHCP 的 `Wired connection 1`，而本网段没有 DHCP 服务器，于是一遍遍 45 秒超时，
-  协商好了却永远拿不到地址。
+- ① 没地址 / type 不是 AP → 热点没起来，重跑 `sudo ./scripts/pc_hotspot.sh`。
+  如果它报 `supplicant-timeout`，是监管域没设成 `CN`（`iw reg get` 看 country），
+  5 GHz 在 `country 00` 下全是 PASSIVE-SCAN，内核拒发 beacon。见
+  [17-wireless-link.md](17-wireless-link.md)。
+- ② 是 0 → 狗没连上。狗刚上电要等 20–40 秒；还不行就在狗上确认
+  （要临时插一次网线，或看狗端串口）：
 
   ```bash
-  cd ~/FLMap.3 && ./scripts/pc_net_fix.sh     # 判断 + 重建 + 加固 + 验证，一条命令
+  iw dev wlan0 link            # not connected = 没连上
+  nmcli -f NAME,STATE connection show | grep flmap-wifi
   ```
 
-  是不是这个原因，一行就能确认（见 [06 §8.4](06-troubleshooting.md#84-有线口有链路但没-ip)）：
-  `grep enp131s0 /var/log/syslog | grep -E "carrier|connection-delete"`
-
-  顺手看一眼有没有多出来的自动连接：`sudo nmcli -f NAME,DEVICE connection show`
-- 有 IP 但 ping 不通 → PC 上有第二条默认路由抢走了流量：`ip route get 192.168.123.18`。
+  断了就重连：`sudo nmcli connection up flmap-wifi`（狗端免密 sudo 已配好）。
+- ① ② 都正常但 ping 不通 → 看是不是 DDS/路由层的假象，先跑
+  `./scripts/link_probe.sh`，它会指出是丢包、还是回程没配。
+- 热点重启过、狗还没重连上 → 别急着改配置，等 10 秒再 ping。这就是
+  `lib_link.sh` 里 `flmap` 目标解析要「等狗重连」的原因。
 
 ### 6.2 狗端 `/cloud_registered` 没数据
 
@@ -483,7 +508,7 @@ tail -30 /tmp/flmap_edge/mapping.log     # 找 "Raw feature num"
 | 日志 | 含义 | 处置 |
 |---|---|---|
 | `successfully set lidar attitude, ip: 192.168.123.221` | 驱动正常 | 继续看 mapping.log |
-| `failed to connect` / 一直重试 | 雷达没上电或 IP 不对 | `ping 192.168.123.221`，见 [08](08-hardware.md) |
+| `failed to connect` / 一直重试 | 雷达没上电或 IP 不对 | **在狗上** `ping 192.168.123.221`（从 PC 不直连），见 [08](08-hardware.md) |
 | 驱动正常但 mapping 没 `Raw feature num` | LIO 没收到点云 | `ros2 topic hz /livox/lidar`，检查 QoS 是否成对 |
 
 ### 6.3 有数据，但 RViz 一片空白
@@ -528,8 +553,8 @@ python3 tools/diag/cloud_stat.py -t /flmap/cloud -n 1
 
 ```bash
 # 狗端本机频率 vs PC 端频率，两个数一比就知道丢在哪
-ssh unitree@192.168.123.18 'export ROS_DOMAIN_ID=42 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp; \
-  source ~/flmap_ws/install/setup.bash; ros2 topic hz /flmap/cloud'
+ssh unitree@10.42.0.18 'export ROS_DOMAIN_ID=42 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp; \
+  source ~/flmap3_ws/install/setup.bash; ros2 topic hz /flmap/cloud'
 ros2 topic hz /flmap/cloud
 ```
 
@@ -578,7 +603,7 @@ bag 没坏就不用重扫，直接重导：
 
 ```bash
 scp src/flmap_bridge/config/bridge_default.yaml \
-    unitree@192.168.123.18:~/flmap_ws/src/flmap_bridge/config/
+    unitree@10.42.0.18:~/flmap3_ws/src/flmap_bridge/config/
 ```
 
 然后在狗端控制台 `quit` 再重进。改了 C++ 代码才需要
@@ -603,7 +628,7 @@ PC 端累加密度：`./scripts/pc_view.sh voxel_leaf:=0.10`（默认 0.15，越
 
 ```bash
 # ---------- 首次 ----------
-cd ~/FLMap.3
+cd ~/FLMap.2
 ./setup.sh
 ./scripts/clock_sync.sh start
 ./scripts/clock_sync.sh install
@@ -611,15 +636,15 @@ cd ~/FLMap.3
 
 # ---------- 每次实验 ----------
 # 终端 A
-cd ~/FLMap.3 && ./scripts/clock_sync.sh start
+cd ~/FLMap.2 && ./scripts/clock_sync.sh start
 
 # 终端 B
-ssh unitree@192.168.123.18
-cd ~/flmap_ws && ./scripts/edge_control.sh
+ssh unitree@10.42.0.18
+cd ~/flmap3_ws && ./scripts/edge_control.sh
 #   进去后：start
 
 # 终端 C
-cd ~/FLMap.3 && ./scripts/pc_view.sh
+cd ~/FLMap.2 && ./scripts/pc_view.sh
 
 # ---------- 收工 ----------
 # 终端 B：stop  →  quit
@@ -627,7 +652,7 @@ cd ~/FLMap.3 && ./scripts/pc_view.sh
 
 # ---------- 出问题 ----------
 # 先按 §5 的前三行加载 ROS 环境
-cd ~/FLMap.3 && ./scripts/link_probe.sh
+cd ~/FLMap.2 && ./scripts/link_probe.sh
 python3 tools/diag/cloud_stat.py -t /flmap/cloud -n 1
 ./tools/diag/run_bridge_selftest.sh -n 5000
 ```
@@ -638,8 +663,8 @@ python3 tools/diag/cloud_stat.py -t /flmap/cloud -n 1
 
 | 内容 | 路径 |
 |---|---|
-| 仓库（PC） | `/home/cj/FLMap.3` |
-| 仓库（狗端副本） | `unitree@192.168.123.18:~/flmap_ws` |
+| 仓库（PC） | `/home/cj/FLMap.2` |
+| 仓库（狗端副本） | `unitree@10.42.0.18:~/flmap3_ws` |
 | 狗端运行日志 | `/tmp/flmap_edge/{driver,mapping,bridge}.log` |
 | 狗端录包 | `~/bags/<时间戳>/scan/` |
 | 授时服务日志 | `/tmp/go2_timeserver.log` |
