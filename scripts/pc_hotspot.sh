@@ -127,14 +127,12 @@ nmcli connection add type wifi ifname "$IFACE" con-name "$CON" ssid "$SSID" \
     802-11-wireless.mode ap \
     802-11-wireless.band "$BAND" \
     802-11-wireless.channel "$CHAN" \
+    802-11-wireless.powersave 2 \
     wifi-sec.key-mgmt wpa-psk \
     wifi-sec.psk "$PASS" \
     ipv4.method shared \
     ipv4.addresses "$ADDR" >/dev/null 2>&1 || { bad "建连接失败"; exit 1; }
 ok "已创建 $CON（AP / 5GHz / ch$CHAN / $ADDR）"
-
-# AP 模式下关掉省电，否则转发延迟会抖
-iw dev "$IFACE" set power_save off 2>/dev/null && ok "省电已关"
 
 if timeout 90 nmcli connection up "$CON" >/dev/null 2>&1; then
     ok "热点已启动（$BAND / ch$CHAN）"
@@ -150,6 +148,19 @@ else
         dim "看详细日志： journalctl -u NetworkManager -n 40 --no-pager"
     fi
     exit 1
+fi
+
+# 省电必须在 up 之后关：NM 激活连接时会把 iw 的设置重置回 on。
+# rtw89 的 AP 在省电打开时会「起得来但几分钟后停发 beacon」——狗端表现为掉线，
+# 而 PC 侧 iw 依然显示 type AP，极难从主机侧看出来。
+iw dev "$IFACE" set power_save off 2>/dev/null
+PS=$(iw dev "$IFACE" get power_save 2>/dev/null | awk '{print $NF}')
+if [ "$PS" = "on" ]; then
+    warn "省电仍为 on —— rtw89 会在几分钟后静默丢 beacon"
+    dim "处置：sudo iw dev $IFACE set power_save off"
+    dim "     并起守护：sudo ./scripts/ap_watchdog.sh"
+else
+    ok "省电已关（$PS）"
 fi
 
 # ------------------------------------------------ 3. DDS 多播出口
