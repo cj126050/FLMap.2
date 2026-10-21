@@ -236,7 +236,8 @@ python3 tools/bench_bridge.py --seconds 8
 | [15-3dgs-pipeline.md](docs/15-3dgs-pipeline.md) | 3DGS 离线流水线与参数 | 跑 3DGS |
 | [16-semi-edge-sim.md](docs/16-semi-edge-sim.md) | 无硬件也能验的仿真链路 | 没狗在手上时 |
 | [17-wireless-link.md](docs/17-wireless-link.md) | ★ **无线链路本体**：主机开 AP、狗连入、监管域、DDS 网卡绑定、实测数字 | **本包的核心，先看这篇** |
-| [18-local-operation.md](docs/18-local-operation.md) | ★ 从开机到 PCD 回传的完整命令串 | 现场照着敲 |
+| [21-boot-to-scan-sop.md](docs/21-boot-to-scan-sop.md) | ★★ 三设备（PC/狗/雷达）上电→出图全流程 SOP，每步带成功标志 | **第一次跑就照这个** |
+| [18-local-operation.md](docs/18-local-operation.md) | 从开机到 PCD 回传的完整命令串（操作细节） | 现场照着敲 |
 | [20-imu-impact.md](docs/20-imu-impact.md) | 某几帧点云歪掉（坐标架被掰）的定位：IMU 冲击尖峰 | 地图局部错位 / 重影 |
 | [19-wireless-selection.md](docs/19-wireless-selection.md) | 历史选型：四条通路的成本与风险、方案 C 为何证伪 | 想知道"为什么不用狗自带 Wi-Fi" |
 

@@ -100,9 +100,9 @@ ssh -t unitree@10.42.0.18 'bash ~/flmap3_ws/scripts/edge_control.sh'
 `-t` 不能省：控制台要读键盘，没有 TTY 的 ssh 会让 `read` 立刻拿到 EOF，控制台刚起来就退出。
 
 > 路径写的是狗上**当前唯一装好脚本**的工作空间 `~/flmap3_ws`。两包代码逐字节一致，
-> 无线包直接复用它，不必再编译一份。若你另外用 `./scripts/deploy_edge.sh` 部署过
-> （会装到 `~/flmap_ws`），把路径换掉即可。不确定先跑：
-> `ssh unitree@10.42.0.18 'ls -d ~/*_ws/*/scripts/edge_control.sh'`
+> 路径固定是 `~/flmap3_ws`（`lib_link.sh` 的 `LINK_EDGE_WS` 就写的这个）。
+> 狗上另有一个 10-18 留下的废弃 `~/flmap_ws`，**没有 `scripts/`**，别用。
+> 标准流程与全部检查点见 `21-boot-to-scan-sop.md`。
 
 连上后它先清理上次残留的驱动/建图/桥进程，然后显示：
 

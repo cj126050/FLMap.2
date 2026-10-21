@@ -115,7 +115,8 @@ FLMap.2/
     ├── 15-3dgs-pipeline.md
     ├── 16-semi-edge-sim.md
     ├── 17-wireless-link.md  # ★ the wireless link itself: AP on the PC, dog as STA
-    ├── 18-local-operation.md# ★ boot -> scan -> RViz -> bag/PCD, copy-pasteable
+    ├── 21-boot-to-scan-sop.md# ★★ PC + dog + LiDAR power-on -> scan SOP, with checkpoints
+    ├── 18-local-operation.md# boot -> scan -> RViz -> bag/PCD, copy-pasteable
     ├── 19-wireless-selection.md  # why scheme C (borrow the dog's Wi-Fi) is dead
     └── 20-imu-impact.md     # ★ a few frames tilt: IMU impact spikes (not dropouts)
 ```
