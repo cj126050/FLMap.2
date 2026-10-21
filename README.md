@@ -104,7 +104,7 @@ FLMap.2/
     ├── 04-pc-visualization.md
     ├── 05-bandwidth-tuning.md
     ├── 06-troubleshooting.md
-    ├── 07-gap-fix.md        # data-stream dropout resilience
+    ├── 07-gap-fix.md        # data-stream dropout resilience (cloud flies away)
     ├── 08-hardware.md       # Mid360 mounting / wiring / IP config
     ├── 09-time-sync.md
     ├── 10-pitfalls.md       # run diary: every trap hit so far, with screenshots
@@ -116,7 +116,8 @@ FLMap.2/
     ├── 16-semi-edge-sim.md
     ├── 17-wireless-link.md  # ★ the wireless link itself: AP on the PC, dog as STA
     ├── 18-local-operation.md# ★ boot -> scan -> RViz -> bag/PCD, copy-pasteable
-    └── 19-wireless-selection.md  # why scheme C (borrow the dog's Wi-Fi) is dead
+    ├── 19-wireless-selection.md  # why scheme C (borrow the dog's Wi-Fi) is dead
+    └── 20-imu-impact.md     # ★ a few frames tilt: IMU impact spikes (not dropouts)
 ```
 
 ## Quick start

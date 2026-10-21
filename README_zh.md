@@ -213,7 +213,7 @@ python3 tools/bench_bridge.py --seconds 8
 | [04-pc-visualization.md](docs/04-pc-visualization.md) | PC 端环境、RViz 面板、累加器调参、录屏、离线回放 | 想让画面更好看 |
 | [05-bandwidth-tuning.md](docs/05-bandwidth-tuning.md) | 带宽公式、调参优先级、极端场景预设 | 画面卡顿 / 掉帧 |
 | [06-troubleshooting.md](docs/06-troubleshooting.md) | 按症状索引的排查手册 | 出问题时 |
-| [07-gap-fix.md](docs/07-gap-fix.md) | 数据断流导致的点云发散修复 | 点云突然飞走 |
+| [07-gap-fix.md](docs/07-gap-fix.md) | 数据断流导致的点云发散修复 | 点云整体突然飞走 |
 | [08-hardware.md](docs/08-hardware.md) | Mid360 接线、IP 配置、安装姿态、与内置 L1 共存 | 装雷达时 |
 | [09-time-sync.md](docs/09-time-sync.md) | 两端时间戳对齐、PC 授时 | 时间差报警时 |
 | [10-pitfalls.md](docs/10-pitfalls.md) | 踩过的坑合集（含点云分量串位的前后对比图） | 出怪问题时 |
@@ -225,6 +225,7 @@ python3 tools/bench_bridge.py --seconds 8
 | [16-semi-edge-sim.md](docs/16-semi-edge-sim.md) | 无硬件也能验的仿真链路 | 没狗在手上时 |
 | [17-wireless-link.md](docs/17-wireless-link.md) | ★ **无线链路本体**：主机开 AP、狗连入、监管域、DDS 网卡绑定、实测数字 | **本包的核心，先看这篇** |
 | [18-local-operation.md](docs/18-local-operation.md) | ★ 从开机到 PCD 回传的完整命令串 | 现场照着敲 |
+| [20-imu-impact.md](docs/20-imu-impact.md) | 某几帧点云歪掉（坐标架被掰）的定位：IMU 冲击尖峰 | 地图局部错位 / 重影 |
 | [19-wireless-selection.md](docs/19-wireless-selection.md) | 历史选型：四条通路的成本与风险、方案 C 为何证伪 | 想知道"为什么不用狗自带 Wi-Fi" |
 
 ## 六、兼容性与已知限制
