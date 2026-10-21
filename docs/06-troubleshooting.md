@@ -17,10 +17,14 @@
 | PC 端内存一直涨 | [§6](#6-pc-端内存一直涨) |
 | 时间戳相关报错 | [§7](#7-时间戳报错) |
 | 狗端起不来 / 编译失败 | [§8](#8-狗端编译与启动失败) |
+| **有线口有链路但没 IP / 全部 ping 不通** | [§8.4](#84-有线口有链路但没-ip) |
+| **stop 后 PCD 导出失败** | [§8.3](#83-stop-后-pcd-导出失败) |
+| `quit` 后 PCD 导出失败 | [§8.3](#83-stop--quit-之后-pcd-导出失败) |
 | ssh / 部署失败 | [§9](#9-ssh-与部署失败) |
 | 搜不到机器狗热点 / App 连不上 | [§10](#10-搜不到机器狗热点--app-连不上) |
 | 扫描输出看不懂，怕是隐藏网络 | [§10.1](#101-扫描结果怎么读避免误判成隐藏网络) |
 | 改过 SSID 后热点彻底消失 | [§10.2](#102-情况③改过-ssid-后再也搜不到) |
+| **有数据、有频率，但点云形状不对** | [§11](#11-有数据有频率但点云形状不对) → [10-pitfalls](10-pitfalls.md) |
 
 ---
 
@@ -32,7 +36,7 @@
 
 ```bash
 # ① 狗端到底在发吗？（在狗端执行）
-ros2 topic hz /flmap/cloud            # 有 5 Hz → 狗端正常，问题在链路/PC
+ros2 topic hz /flmap/cloud            # 有 10 Hz → 狗端正常，问题在链路/PC
                                       # 无输出 → 看 §8
 
 # ② PC 能看到这个 topic 吗？
@@ -74,30 +78,34 @@ ros2 topic echo /flmap/cloud --field header.frame_id --once
 
 ```bash
 # 狗端
-grep "in .* pts" /tmp/flmap_edge/bridge.log | tail -3    # 看 @5.0 Hz 是否达到
+grep "in .* pts" /tmp/flmap_edge/bridge.log | tail -3    # 看 @10.0 Hz 是否达到
 ros2 topic hz /flmap/cloud                                # 本机订阅，不受链路影响
 ```
 
 | 狗端本机 | PC 端 | 结论 |
 |---|---|---|
-| 5 Hz | 5 Hz | 正常，卡顿来自 RViz 渲染或 PC 性能 |
-| 5 Hz | 2–3 Hz | **链路丢帧** → 见下面三条 |
-| 2–3 Hz | 2–3 Hz | 狗端输出就不够 → 输入帧率低或限流失效 |
+| 10 Hz | 10 Hz | 正常，卡顿来自 RViz 渲染或 PC 性能（最常见） |
+| 10 Hz | 6–8 Hz | **链路丢帧** → 见下面四条 |
+| 6 Hz | 6 Hz | 狗端输出就不够 → 输入帧率低或限流失效 |
 
-链路丢帧的处置顺序：
+PC 端比狗端低时的处置顺序：
 
-1. **关 Wi-Fi 省电**（最常见，占一半以上）
+1. **先量物理层**（有线出问题只有这几种，占绝大多数）
 
    ```bash
-   sudo iw dev wlan0 set power_save off
-   iw dev wlan0 link                       # 看 signal 与 bitrate
+   ./scripts/link_probe.sh        # 看丢包、抖动、协商速率
    ```
 
-2. **换 5 GHz**。2.4 GHz 在办公室几乎必然拥堵。
+   有线正常是 **丢包 0% / 抖动 0.08 ms / 1000 Mbit/s**。任何一项不满足，
+   换网线（CAT5e 以上）、换交换机端口，别先怀疑参数。
 
-3. **降参数**。`voxel_leaf:=0.3 max_rate_hz:=3.0`，见 [05](05-bandwidth-tuning.md)。
+2. **查本机网卡选错**。多网卡机器上 CycloneDDS 可能绑到 Wi-Fi 上，
+   `link_probe.sh` 第 1 节会打印"到 192.168.123.18 走: enp131s0"。
 
-4. **确认没有中间设备**。Mesh 中继、VPN、代理都会让 UDP 抖动放大。
+3. **确认没有中间设备**。VPN、代理、Docker 网桥的 iptables 都会让 UDP 抖动放大。
+
+4. **降参数**（带宽几乎不可能是原因，11.6 Mbit/s 只占千兆 1.2%）。
+   真降的话：`voxel_leaf:=0.15`，见 [05](05-bandwidth-tuning.md)。
 
 ---
 
@@ -230,14 +238,220 @@ ros2 param get /fastlio2_mapping use_sim_time     # 实时跑必须是 false
 | `colcon build` 报 `catkin_pkg` 找不到 | 用了 pyenv/conda 的 python3 | `export PATH=/usr/bin:$PATH` 后再编 |
 | 编译过但 `ros2 launch` 说找不到 launch 文件 | 没 `source install/setup.bash` | 每个新终端都要 source |
 | `fastlio2_mapping` 起了但不出图 | `use_sim_time` 默认 true，在等 `/clock` | 加 `use_sim_time:=false` |
+| `rmw_create_node: failed to create domain`，节点一启动就退 | 继承了坏的 `CYCLONEDDS_URI`（见 §8.1） | `unset CYCLONEDDS_URI`，或直接用 `scripts/edge_control.sh` |
+| `ros2 topic hz` 明明有数据却什么都不打印 | 管道下 Python 块缓冲（见 §8.2） | `PYTHONUNBUFFERED=1 ros2 topic hz …` |
 
 启动后自检：
 
 ```bash
 ros2 node list                      # 应有 livox_ros_driver2 / fastlio2_mapping / flmap_bridge
 ros2 topic hz /cloud_registered     # 应约 10 Hz
-ros2 topic hz /flmap/cloud          # 应约 5 Hz
+ros2 topic hz /flmap/cloud          # 应约 10 Hz
 ```
+
+### 8.1 节点秒退：`failed to create domain`
+
+**判据**：`ros2 launch` 打印半屏后退出，日志里有关键词
+
+```
+config: //CycloneDDS/Domain/General: Interfaces: unknown element (…/cyclonedds.xml line 5)
+[ERROR] [rmw_cyclonedds_cpp]: rmw_create_node: failed to create domain, error Error
+```
+
+（注意：这个报错常被后面的 `rcutils_set_error_state` 大段红色输出淹没，很容易误判成别的问题。）
+
+**原因**：狗端 `~/.bashrc` 里 fishros 生成的那段初始化，在选 `1` 时会
+`export CYCLONEDDS_URI=~/cyclonedds_ws/cyclonedds.xml`。那份 xml 用的是
+CycloneDDS **0.9+** 的 `<Interfaces>` 语法，而 Foxy 自带的是 **0.7.0**，
+不认识这个元素 → 整个 participant 创建失败 → 任何节点都起不来。
+
+**处置**（三选一，从轻到重）：
+
+```bash
+unset CYCLONEDDS_URI                     # ① 当前 shell 临时解决
+./scripts/edge_control.sh                # ② 脚本已自动忽略并打印 [info] 一行
+# ③ 彻底解决：注释掉 ~/.bashrc 里
+#    # >>> fishros initialize >>> … # <<< fishros initialize <<< 整段
+```
+
+本项目不需要 `CYCLONEDDS_URI`：默认多播发现已经选对了 `eth0`（192.168.123.18）。
+真要用自己的 DDS 配置，用 `FLMAP_KEEP_CYCLONEDDS=1` 显式打开。
+注意 xml 语法要和 `ros-foxy-cyclonedds` 的版本对齐，别混用不同代的写法。
+
+### 8.2 `ros2 topic hz` 通过管道没有输出
+
+**判据**：手工敲能看到 `average rate: 10.0`，但写进脚本、接 `grep` 就永远是空：
+
+```bash
+timeout 6 ros2 topic hz /flmap/cloud | grep -m1 "average rate"   # 什么都没有
+PYTHONUNBUFFERED=1 timeout 6 ros2 topic hz /flmap/cloud \
+    | grep -m1 "average rate"                                    # average rate: 9.01
+```
+
+**原因**：`ros2` CLI 是 Python 程序，stdout 不是 TTY 时按 4–8 KB 块缓冲。
+`timeout` 在缓冲区没写满前就把进程杀掉，`grep` 一个字节都收不到。
+`stdbuf -oL` 也没用 —— Python 在 libc 之上还有自己的一层缓冲。
+
+**处置**：所有做频率检测的脚本都加 `PYTHONUNBUFFERED=1`（本仓库的
+`edge_control.sh` / `link_probe.sh` / `pc_view.sh` 都已经这样写）。
+这也是为什么"脚本报无数据、手工看却有数据"这种诡异现象会出现。
+
+---
+
+### 8.3 `stop` / `quit` 之后 PCD 导出失败
+
+**判据**：`quit` 后打印
+
+```
+PCD 导出失败（/cloud_registered 可能没数据）
+```
+
+但 `~/bags/<时间>/scan/` 里 `metadata.yaml` 和 `*.db3` 都在，`record.log`
+也没有报错，`ros2 bag info` 里 `/cloud_registered` 的 message count 是几千。
+
+**原因**：三层，一层比一层深，而且第一层把后两层完全遮住了。
+
+**第一层 —— 提示语骗人。** 这句话把两类毫无关系的失败合并了：① 真的没有点云；
+② **导出脚本自己崩了**。而 `do_stop` 里那行
+
+```bash
+if /usr/bin/python3 bag_to_pcd.py ... 2>/dev/null; then   # ← stderr 被丢进黑洞
+```
+
+把 traceback 全吞了，于是"崩了"和"没数据"长得一模一样。
+
+**第二层 —— 老脚本 import 了一个 Foxy 没有的模块。** 版本是：
+
+```python
+from sensor_msgs_py import point_cloud2 as pc2      # Foxy 没有这个模块
+```
+
+`sensor_msgs_py` 是 Galactic 才从 `sensor_msgs` 里拆出来的，Go2 出厂镜像里
+没有它的包，import 直接 `ModuleNotFoundError`，脚本**一步都没跑到读数据**。
+就算装上，Foxy 版 `read_points` 返回 tuple 列表，紧接着的 `arr["x"]` 照样
+`TypeError`。
+
+**第三层 —— 狗端连 `rosbag2_py` 都没有。** 这一层最误导人，因为
+`ros2 bag` 命令是能用的：
+
+```
+$ ros2 bag info ~/bags/2026-10-19_14-13-40/scan
+Messages: 1952
+Topic: /cloud_registered | Count: 63          ← 命令正常
+
+$ /usr/bin/python3 -c "import rosbag2_py"
+ModuleNotFoundError: No module named 'rosbag2_py'   ← 绑定却是缺的
+```
+
+`ros2` 这个 CLI 有自己的加载路径，**用它能跑，不能推断 `/usr/bin/python3`
+也能 import**。所以"环境检查报缺 rosbag2_py"在狗上是**真的**，不是误报
+（PC 上如果 shell 没 source ROS 才会误报，那是另一回事）。
+
+| 层 | 缺什么 | 现象 |
+|---|---|---|
+| 1 | —— | 所有失败都显示成"可能没数据" |
+| 2 | `sensor_msgs_py` | 老脚本 import 阶段就退出 |
+| 3 | `rosbag2_py` | 换掉 sensor_msgs_py 后仍然 import 失败 |
+
+好消息是：**导出其实不需要这两个包**。`.db3` 就是普通的 sqlite3 文件，
+`sqlite3` 是 Python 标准库，`rclpy` + `sensor_msgs` 是 ROS 基础包，一定在。
+
+**处置**：
+
+1. 更新到当前版本的 `scripts/bag_to_pcd.py`。它自动选读取路径：
+   有 `rosbag2_py` 就走它（PC 上），没有就直接用 `sqlite3` 读 `.db3`（狗端）。
+   点云按 `PointField` 的 `offset`/`datatype` 自己拆列 —— FAST-LIO2 的
+   `point_step` 是 **48 字节**，靠 `read_points` 反而容易踩串位。
+2. **bag 不用重录**，直接重导：
+
+```bash
+cd ~/flmap_ws
+/usr/bin/python3 scripts/bag_to_pcd.py ~/bags/2026-10-19_13-52-32/scan \
+                                        ~/bags/2026-10-19_13-52-32/map.pcd
+```
+
+成功时会把每个话题的条数打出来，顺便确认到底录到了多少帧（下面是实测）：
+
+```
+[info] bag=.../scan
+[info] backend=sqlite3 直读 / scan_0.db3
+[info] /aft_mapped_to_init          64 条
+[info] /cloud_registered            63 条
+[info] /livox/imu                 1765 条
+[info] /livox/lidar                 60 条
+[OK] 63 帧, 983728 点 -> .../map.pcd  (15.0 MB)
+```
+
+**同类教训**：脚本里任何 `... 2>/dev/null` 都必须有替代的落盘点。现在的
+`do_stop` 把输出写进 `$TASK_DIR/pcd_export.log`，失败时直接 `tail` 最后几行
+给你看，并区分「没有 metadata.yaml（录制没正常收尾）」和「bag 是好的、只是
+导不出来」这两种情况 —— 后者只要重跑上面那条命令，不用重扫。
+
+**先分清是不是真没数据**：重导之前可以先用 `ros2 bag info` 扫一眼，比猜快：
+
+```bash
+ros2 bag info ~/bags/2026-10-19_13-52-32/scan
+```
+
+看 `/cloud_registered` 的 `Message count`。是 0 或压根没这个 topic，才轮到
+怀疑 FAST-LIO2；是几百上千，那百分之百是解析层的问题。
+
+---
+
+## 8.4 有线口有链路但没 IP
+
+### 症状
+
+```bash
+ip -br addr show enp131s0
+# enp131s0   UP   fe80::.../64          ← 只有链路本地，没有 192.168.123.10
+cat /sys/class/net/enp131s0/carrier       # 1
+cat /sys/class/net/enp131s0/speed         # 1000
+```
+
+`ping 192.168.123.18 / .221 / .161` 全部 100% 丢包，`ip route get 192.168.123.18`
+显示走 **无线** 口。看起来像"狗没开机"，实际狗和网线都好着。
+
+### 判定：一条命令区分「网线坏了」和「配置被删了」
+
+```bash
+grep enp131s0 /var/log/syslog | grep -E "carrier|connection-delete|Activation"
+```
+
+- 只有开机时一条 `carrier: link connected`，**没有任何 `link disconnected`**
+  → 物理层从未中断，问题在配置层。
+- 出现 `audit: op="connection-delete" ... name="Wired connection 1"` 且后面紧跟着
+  `dhcp4 (enp131s0): activation: beginning transaction` → **保存静态 IP 的配置被删了**，
+  NetworkManager 自动补了一条 DHCP 的默认配置。这个网段没有 DHCP 服务器，
+  于是每 45 秒 `state change: ip-config -> failed (reason 'ip-config-unavailable')`
+  循环一次，永远拿不到地址。
+
+删除动作通常来自图形界面：`gnome-control-center network` 里点「删除此连接」，
+或手滑 `nmcli con delete`。日志里能直接看到发起者：
+
+```
+audit: op="connection-delete" uuid="96b9e31f-..." name="Wired connection 1"
+pname="gnome-control-center" pid=2058406 uid=1000 result="success"
+```
+
+### 处置
+
+```bash
+cd ~/FLMap.3 && ./scripts/pc_net_fix.sh
+```
+
+脚本会：检查 carrier → 复用或重建 `go2-wired`（静态 `192.168.123.10/24`、不设网关、
+`autoconnect-priority 100`）→ 关掉其它以太网配置的自动连接（防止 DHCP 配置顶上来）
+→ 拉起并 ping 三个目标验证。幂等，重复跑只做校验。
+
+手工等价操作见 [11-runbook §2.1](11-runbook.md)。
+
+### 为什么会反复踩
+
+`Wired connection 1` 是 NetworkManager 给未知网口自动起的名字，不承载任何语义。
+人在图形界面里清理"多余连接"时，删掉它不会有任何警告，而 FLMap.3 的一切都依赖
+它里面的那一个地址。所以现在统一用名字明确的 `go2-wired`，并且：
+**不要在「设置 → 网络」里删除有线连接**，要改就改 `go2-wired` 的参数。
 
 ---
 
@@ -248,13 +462,16 @@ ros2 topic hz /flmap/cloud          # 应约 5 Hz
 | `ssh: connect to host ... No route to host` | 不在同一网段；`ip route get <狗IP>` 看走哪个网卡 |
 | `Permission denied (publickey)` | `ssh-copy-id unitree@<狗IP>` |
 | `Host key verification failed` | 狗的 IP 变了：`ssh-keygen -R <狗IP>` |
-| `deploy_edge.sh` 卡在 rsync | 狗端磁盘满（`df -h`），或 Wi-Fi 太差换有线部署 |
+| `deploy_edge.sh` 卡在 rsync | 狗端磁盘满（`df -h`）；有线也慢的话查 `link_probe.sh` 的协商速率 |
 | rsync 后狗端编译失败 | 用了 `--no-patch` 但之前没打过补丁；去掉该参数重跑 |
 | 部署后行为没变 | 狗端旧进程还在跑：`pkill -f fastlio2_mapping` 后重启 |
 
 ---
 
-## 10. 搜不到机器狗热点 / App 连不上
+## 10. 搜不到机器狗热点 / App 连不上（与建图链路无关）
+
+> FLMap.3 的点云走有线，**本节只影响用手机 App 控狗**，不影响建图与可视化。
+> 建图跑不起来请看 §8 / §9；画面空请看 §1。
 
 这是脱离线缆后最常见的卡点：改过 WiFi 名称，结果手机和 PC 都搜不到那个名字。
 先分清 App 里填的到底是**哪种**名字——两种机制完全不同，改错地方就会变成"谁也连不上"。
@@ -268,7 +485,7 @@ ros2 topic hz /flmap/cloud          # 应约 5 Hz
 
 | 判据 | 原因 | 处置 |
 |---|---|---|
-| 遥控器能控制，但手机/PC 搜不到任何相关 SSID | 热点被设成隐藏，或名字没生效 | `sudo ./scripts/wifi_scan_report.sh` 看有没有 `<隐藏或空>` 条目；**先查该条目的 MAC 厂商**，是 TP-LINK/华硕/小米就与狗无关 |
+| 遥控器能控制，但手机/PC 搜不到任何相关 SSID | 热点被设成隐藏，或名字没生效 | `sudo iw dev wlan0 scan \| grep -i ssid` 看有没有空 SSID 条目；**先查该条目的 MAC 厂商**，是 TP-LINK/华硕/小米就与狗无关 |
 | 扫到 `Go2_xxxxxx` 这类出厂名 | 改的名字没生效 | 连旧名进去重改，改完**必须重启机器人** |
 | 扫不到任何强信号 AP（1 m 内应 ≥ −50 dBm） | 热点没起来，或已被切成 STA 模式 | 断电静置 10 s 再上电，等 **2 分钟**再扫（WiFi 模块启动比主控慢） |
 | App 里填的名字恰好是**手机热点名** | 机器狗在连你的手机，不是在自己发热点 | 把手机热点开起来、名字设成该值，等 1 分钟让狗连上，再用 App 改回 AP 模式 |
@@ -279,7 +496,7 @@ ros2 topic hz /flmap/cloud          # 应约 5 Hz
 
 ### 10.1 扫描结果怎么读（避免误判成「隐藏网络」）
 
-`wifi_scan_report.sh` 的输出里有三个坑，看错方向就会白折腾一晚上：
+扫描输出里有三个坑，看错方向就会白折腾一晚上（下面用 `sudo iw dev wlan0 scan` 的输出举例）：
 
 | 看到的 | 真实含义 |
 |---|---|
@@ -320,7 +537,29 @@ ros2 topic hz /flmap/cloud          # 应约 5 Hz
 
 ---
 
-## 11. 出问题时的信息采集
+## 11. 有数据、有频率，但点云形状不对
+
+**判据**：`ros2 topic hz /flmap/cloud` 正常、RViz 有图、地图点数在涨，但形状像
+"原点附近一小团"或者"一圈细线"，Z 轴范围甚至能到 ±20 m。
+
+**原因**：点云打包串位 —— 分量之间错开若干字节。这类故障**不会**体现在消息头上，
+`point_step` / `row_step` / `len(data)` 全部自洽，所以靠"有没有数据"永远查不出来。
+
+**处置**：
+
+```bash
+# 1. 看数值分布（三轴 min 是否相同、=1.0 是否异常多、intensity 是否有负值）
+python3 tools/diag/cloud_stat.py -t /flmap/cloud -n 2
+
+# 2. 若来源是自己改过的打包代码，跑回归测试
+./tools/diag/run_bridge_selftest.sh -n 5000
+```
+
+**完整原理、诊断过程和修复写法**见 [10-pitfalls.md](10-pitfalls.md)。
+
+---
+
+## 12. 出问题时的信息采集
 
 提 issue 时带上这些，能省掉来回问：
 
@@ -329,6 +568,7 @@ ros2 topic hz /flmap/cloud          # 应约 5 Hz
 ./scripts/link_probe.sh > link.txt 2>&1
 ros2 topic list > topics.txt
 ros2 topic info /flmap/cloud -v > qos.txt
+python3 tools/diag/cloud_stat.py -t /flmap/cloud -n 1 > cloud_stat.txt 2>&1
 uname -a; echo $ROS_DISTRO $ROS_DOMAIN_ID $RMW_IMPLEMENTATION
 
 # 狗端额外

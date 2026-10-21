@@ -5,6 +5,11 @@ Mapping runs on the robot's edge computer; RViz runs on your PC, over Wi-Fi.
 
 `ROS 2 Foxy (edge)` · `ROS 2 Humble (PC)` · `Livox Mid360` · `FAST-LIO2` · `BSD-3-Clause`
 
+> **This repo is the wireless package.** The wired alternative (gigabit switch) is the sibling
+> **[FLMap.3](https://github.com/cj126050/FLMap.3)**. Both ship the same robot code; they differ
+> in exactly one layer: `scripts/lib_link.sh` — target address, expected NIC, signal/rate
+> criteria, failure hints. **Change the link only there; never touch it from business logic.**
+
 > 中文文档见 [README_zh.md](README_zh.md)。本仓库的 `docs/` 用中文编写（目标使用者是中文社区），欢迎 PR 补英文翻译。
 
 ---
@@ -70,13 +75,23 @@ FLMap.2/
 │   ├── flmap_accumulator/   # ★ NEW  pc:   merge frames into a growing map -> /flmap/map
 │   └── flmap_bringup/       # ★ NEW  launch files + RViz config for both sides
 ├── scripts/
+│   ├── lib_link.sh          # ★ link layer: the only file that knows "wireless"
+│   ├── pc_hotspot.sh        # ★ host-side 5 GHz AP
+│   ├── dog_wlan_probe.sh    # ★ robot-side dongle probe (lsusb / driver / modes)
+│   ├── dog_wlan_join.sh     # ★ robot-side join + static 10.42.0.18 + autoconnect
+│   ├── wifi_link_check.sh   # four-stage wireless health check
+│   ├── dds_bind.sh          # pin CycloneDDS to the NIC that reaches the target
+│   ├── pc_dds_peer.sh       # optional: unicast discovery when the AP drops multicast
 │   ├── deploy_edge.sh       # rsync -> Go2, apply Foxy patches, build
-│   ├── edge_control.sh      # interactive console on the robot (no RViz)
-│   ├── pc_view.sh           # one-key remote RViz on the PC
+│   ├── edge_control.sh      # robot console (no RViz); --auto N for unattended runs
+│   ├── edge_scan.sh         # PC-side one command: scan N s -> export -> rsync -> verify
+│   ├── pc_view.sh           # one-key remote RViz (auto soft-GL when no GPU)
+│   ├── pcd_preview.py       # PCD -> PNG (no RViz, no GPU)
+│   ├── clock_sync.sh        # time sync: PC serves, robot pulls
 │   ├── link_probe.sh        # 4-layer link diagnosis (phy -> net -> DDS -> app)
 │   ├── patch_foxy.sh        # Humble -> Foxy source patches (idempotent)
 │   ├── env_check.sh         # environment report
-│   └── legacy/              # the old wired-to-PC scripts, kept for reference
+│   └── legacy/              # archived: wired-to-PC scripts + scheme C probes
 ├── config/
 │   └── cyclonedds_unicast.xml.example   # optional: unicast-only DDS discovery
 ├── tools/
@@ -91,7 +106,17 @@ FLMap.2/
     ├── 06-troubleshooting.md
     ├── 07-gap-fix.md        # data-stream dropout resilience
     ├── 08-hardware.md       # Mid360 mounting / wiring / IP config
-    └── 09-wireless-link.md  # the dock has no radio; four ways to add one
+    ├── 09-time-sync.md
+    ├── 10-pitfalls.md       # run diary: every trap hit so far, with screenshots
+    ├── 11-runbook.md        # one-page operating manual
+    ├── 12-handbook.md       # plain-language primer
+    ├── 13-shutdown.md
+    ├── 14-3dgs-and-slam.md
+    ├── 15-3dgs-pipeline.md
+    ├── 16-semi-edge-sim.md
+    ├── 17-wireless-link.md  # ★ the wireless link itself: AP on the PC, dog as STA
+    ├── 18-local-operation.md# ★ boot -> scan -> RViz -> bag/PCD, copy-pasteable
+    └── 19-wireless-selection.md  # why scheme C (borrow the dog's Wi-Fi) is dead
 ```
 
 ## Quick start

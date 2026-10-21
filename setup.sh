@@ -42,8 +42,12 @@ else
     done
 fi
 [ -z "$ROS_SETUP" ] && die "没找到 ROS 2（/opt/ros/{humble,foxy}/setup.bash）"
+# ROS 的 setup.bash 里引用了若干未定义变量，本脚本开了 set -u，直接 source 会
+# 报 "AMENT_TRACE_SETUP_FILES: unbound variable" 并退出。source 期间临时关掉。
+set +u
 # shellcheck disable=SC1090
 source "$ROS_SETUP"
+set -u
 say "ROS_DISTRO=${ROS_DISTRO}"
 
 IS_EDGE=0

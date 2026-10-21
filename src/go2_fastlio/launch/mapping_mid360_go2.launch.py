@@ -37,7 +37,7 @@ def generate_launch_description():
     # use_sim_time：回放建图用 true，实时建图必须 false（实时数据没有 /clock）
     sim_time_arg = DeclareLaunchArgument(
         'use_sim_time',
-        default_value='true',
+        default_value='false',
         description='Use simulation time (true for bag replay, false for live)'
     )
 

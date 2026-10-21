@@ -1,273 +1,257 @@
-# 02 · 无线链路与 DDS 配置
+# 02 · 有线组网与 DDS 配置
 
-> **连不上的时候，第一个看这份文档。** 它按「拓扑 → IP → Wi-Fi → DDS → 症状表」的顺序写。
+> **这一篇是"连不上时第一个看"的地方。** 全篇只讲有线 —— FLMap.3 的整个前提就是
+> PC、狗、雷达三者用网线挂到同一台交换机上。
 
 ---
 
-## 1. 先选拓扑
-
-PC 和狗必须**在同一个二层网络**里（同一网段）。三种可行方式：
-
-> ⚠️ **前提**：下面三种都要求**狗端已经有一个无线射频**。拓展坞出厂配置里没有
-> （只有一颗 RTL8111 千兆有线，`ip link` 看不到 `wlan0`）。如果还没给狗加无线，
-> 先看 [09-wireless-link.md](09-wireless-link.md)。
-
-### 方式 A：都连同一个路由器（推荐）
+## 1. 拓扑
 
 ```
-        ┌──────────┐
-        │  路由器   │  5 GHz
-        └──┬────┬──┘
-     Wi-Fi │    │ Wi-Fi
-        ┌──▼─┐ ┌▼──────┐
-        │ PC │ │ Go2   │
-        └────┘ └───────┘
+                    ┌──────────────┐
+                    │   千兆交换机   │
+                    └──┬────┬────┬──┘
+           ┌───────────┘    │    └───────────┐
+           │                │                │
+    ┌──────┴──────┐  ┌──────┴──────┐  ┌──────┴──────┐
+    │  PC         │  │ Go2 拓展坞   │  │ Livox Mid360│
+    │ 192.168.123 │  │ 192.168.123 │  │ 192.168.123 │
+    │    .10      │  │    .18      │  │    .221     │
+    └─────────────┘  └─────────────┘  └─────────────┘
+                            │
+                    （狗身内部有线）
+                            │
+                     ┌──────┴──────┐
+                     │  运控单元    │
+                     │    .161     │
+                     └─────────────┘
 ```
 
-- 优点：稳定、两边都能上网、IP 由 DHCP 分配好管理
-- 要求：路由器**关闭 AP 隔离**（很多路由器的「访客网络」默认开着，客户端之间互相不可见）
-- 建议给狗固定 IP（路由器里做 DHCP 绑定），否则每次换地址就要改 `EDGE_HOST`
+三个关键事实：
 
-### 方式 B：PC 开热点，狗连 PC
+1. **所有设备在同一个二层**，同一个 `192.168.123.0/24`，不需要任何路由或 NAT。
+2. **雷达直接把 UDP 点云推给狗**（`56301` 端口），PC 不参与数据搬运。
+3. **PC 只订阅结果话题**，不碰原始传感器数据。
+
+这就是有线模式相对 Wi-Fi 模式最本质的区别：**没有跨网段，就少了一整类静默失败。**
+
+## 2. 地址表
+
+| 设备 | IP | 网卡名 | 说明 |
+|---|---|---|---|
+| PC | `192.168.123.10/24` | `enp131s0`（按实际） | 静态，**不设默认网关** |
+| Go2 拓展坞 | `192.168.123.18/24` | `eth0` | Orin Nano，跑 FAST-LIO2 |
+| Livox Mid360 | `192.168.123.221` | — | 出厂默认是 `192.168.1.1xx`，需先在 Livox Viewer 里改 |
+| 运控单元 | `192.168.123.161` | — | 只做遥控，本方案不依赖它 |
+
+> ⚠️ **雷达地址不是 `192.168.123.20`。** 很多旧笔记写 `.20`，那是早期的另一台。
+> 用 `ping 192.168.123.221` 和 `arp -n` 确认：Mid360 的 MAC 前缀属于
+> `SZ DJI TECHNOLOGY`（Livox 是大疆旗下）。改雷达 IP 的方法见
+> [08-hardware.md](08-hardware.md)。
+
+## 3. PC 侧网卡配置
+
+**不要用 DHCP，也不要填默认网关。**
+
+### 3.1 命令行（临时，重启失效）
 
 ```bash
-# 在 PC 上（NetworkManager）
-nmcli connection add type wifi ifname wlp132s0 con-name go2-hotspot \
-  autoconnect no ssid FLMAP-5G \
-  wifi-sec.key-mgmt wpa-psk wifi-sec.psk 'flmap12345' \
-  802-11-wireless.band a ipv4.method shared ipv4.addresses 10.42.0.1/24
-nmcli connection up go2-hotspot
+sudo ip link set enp131s0 up
+sudo ip addr replace 192.168.123.10/24 dev enp131s0
 ```
 
-- `ipv4.method shared` 让 PC 自己当 DHCP 服务器，狗的地址通常是 `10.42.0.x`
-- 优点：现场没有路由器也能用；缺点：PC 的 Wi-Fi 网卡要同时承担热点，带宽略降
-
-### 方式 C：狗做 AP
-
-部分 Go2 出厂镜像带 `hostapd`。**本仓库不推荐**，因为 Go2 自带的 Wi-Fi 模块通常
-服务的是机器人 App（`192.168.12.x` 网段），与拓展坞的计算网卡不是一回事，容易搞混。
-
-> **注意网段别撞车：** Mid360 出厂 IP 常是 `192.168.1.1xx`，而很多家用路由器也用
-> `192.168.1.0/24`。如果雷达和 PC 在同一网段，会出现"PC 以为雷达在路由器后面"的诡异路由。
-> 本仓库统一把雷达改到 `192.168.123.x`（见 [08-hardware.md](08-hardware.md)）。
-
----
-
-## 2. IP 规划
-
-本仓库默认的地址约定（都可以通过环境变量改）：
-
-| 设备 | 地址 | 说明 |
-|---|---|---|
-| PC | 由路由器 DHCP 分配，如 `192.168.1.100` | 脚本里用 `EDGE_HOST` 指向狗，PC 自己的地址一般不用配 |
-| Go2 拓展坞 | `192.168.123.18`（宇树内网约定） | 若走 Wi-Fi，可能是 `192.168.1.x`，以实际为准 |
-| Mid360 | `192.168.123.20` | 与拓展坞同一网段，接在狗的雷达网口上 |
-
-> **两台机器的 IP 不需要"配成一对"**，只要在同一网段且能互相 ping 通即可。
-> 唯一需要显式填写的地方是：
-> - `scripts/*.sh` 里的 `EDGE_HOST`（PC 找狗）
-> - 狗端 `scripts/edge_control.sh` 里的 `FLMAP_PC_IP`（狗找 PC，只用于 `link` 命令测 RTT）
-
-查地址：
+### 3.2 NetworkManager（持久，推荐）
 
 ```bash
-ip -br addr                    # 本机所有网卡与地址
-ip route get 192.168.123.18    # 去某个地址走哪个网卡
+sudo nmcli connection add type ethernet ifname enp131s0 con-name go2-wired \
+    ipv4.method manual ipv4.addresses 192.168.123.10/24 \
+    ipv4.gateway "" ipv4.dns ""
+sudo nmcli connection up go2-wired
 ```
 
----
+或者直接编辑 nmconnection：
 
-## 3. Wi-Fi 要求清单
+```ini
+[ipv4]
+method=manual
+address1=192.168.123.10/24
+never-default=true
+```
 
-点云流对链路的要求和网页浏览完全不同：**持续、单向、对延迟抖动敏感、丢包不重传**。
+`never-default=true` 是这段配置里最重要的一行。
 
-| 项目 | 要求 | 不满足会怎样 |
-|---|---|---|
-| 频段 | **5 GHz** | 2.4 GHz 在办公室几乎必然拥堵，画面频繁卡顿 |
-| AP 隔离 | **必须关闭** | 两台机器 ping 不通，`ros2 topic list` 永远空 |
-| 省电模式 | 关（`iw dev wlan0 set power_save off`） | 空闲后进省电，RTT 从 3 ms 跳到 100+ ms |
-| 信道宽度 | 40 或 80 MHz | 20 MHz 单流吞吐约 40 Mbps，够但没余量 |
-| Mesh / 中继 | 尽量避免 | 多跳后抖动大增，5 Hz 的点云会一顿一顿 |
-| VPN / 代理 | 不要在同一网卡上开 | DDS 走 UDP，很多 VPN 只代理 TCP，会静默丢包 |
+### 3.3 为什么绝对不能设默认网关
 
-关省电（狗端执行，重启失效，可写进 `/etc/rc.local`）：
+如果给 `enp131s0` 配了 `ipv4.gateway=192.168.123.1`：
+
+- NetworkManager 会往默认路由表里插一条 `default via 192.168.123.1`
+- 它和家里 Wi-Fi / 手机共享那条默认路由打架，metric 小的赢
+- 赢了的话，**整个 PC 断网** —— 网页打不开、对话直接断
+- 输了的话，去 `192.168.123.x` 的包可能仍走对，但任何依赖联网的操作行为不可预期
+
+而 `192.168.123.1` 在很多车上**根本不存在**（ARP 不通，是幽灵路由）。
+它是 Go2 出厂配置里写的网关，不代表真有设备在那儿。
+
+> 判断方法：`ip route | grep default`，正常应该只有一条，走 Wi-Fi 或手机共享，
+> 不该出现 `192.168.123.1`。
+
+## 4. 链路体检
 
 ```bash
-sudo iw dev wlan0 set power_save off
-iw dev wlan0 link          # 看 signal 与 bitrate
+./scripts/link_probe.sh          # 四层逐级检查
 ```
 
----
+单条命令看质量：
 
-## 4. DDS 配置
+```bash
+# 千兆？双工对不对？
+cat /sys/class/net/enp131s0/speed /sys/class/net/enp131s0/duplex
 
-### 4.1 三个必须一致的东西
+# 延迟与抖动（0.5 ms / 0.1 ms 是正常值）
+ping -c 20 -i 0.2 192.168.123.18
+```
 
-两端**必须完全相同**，否则表现为"都在跑但互相看不见"：
+FLMap.3 的参考基线（2026-10-19 实测，千兆交换机）：
 
-| 变量 | 本仓库默认 | 为什么 |
+| 目标 | RTT avg | 抖动 mdev | 丢包 |
+|---|---|---|---|
+| 拓展坞 `.18` | 0.55 ms | 0.12 ms | 0 |
+| 运控 `.161` | 0.52 ms | — | 0 |
+| 雷达 `.221` | 0.74 ms | — | 0 |
+
+**如果 RTT 超过 2 ms 或抖动超过 1 ms**，先查三件事：网线是不是只有百兆
+（`speed` 显示 100）、有没有双工不匹配（`duplex` 不是 `full`）、交换机是不是
+把三个口分在了不同的 VLAN。
+
+## 5. DDS 配置
+
+### 5.1 三个必须一致的东西
+
+| 项 | 值 | 不一致的后果 |
 |---|---|---|
-| `ROS_DOMAIN_ID` | **42** | 宇树自己的节点在 domain 0，用 42 隔离，避免串台 |
-| `RMW_IMPLEMENTATION` | **rmw_cyclonedds_cpp** | FastDDS 与 CycloneDDS 的发现机制不同，混用必然不通 |
-| 消息定义版本 | 同 ROS 版本即可 | 见 §5 跨发行版 |
+| `ROS_DOMAIN_ID` | 两端都是 **42** | 互相看不见，`ros2 topic list` 全空 |
+| RMW 实现 | 两端都用 `rmw_cyclonedds_cpp` | 节点互相发现不了（混用 FastDDS 也能通，但别混） |
+| 网卡绑定 | 只在 `192.168.123.0/24` 这块上发现 | 发现包从别的网卡出去，PC 永远看不到 |
 
-这些变量在所有脚本里都已经设好（`edge_control.sh` / `pc_view.sh` / `link_probe.sh`），
-**手工开终端时记得自己 export**：
+狗端 `~/.bashrc` 里应该有：
 
 ```bash
 export ROS_DOMAIN_ID=42
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-export ROS_LOCALHOST_ONLY=0     # 千万别设成 1，那会只走本机
 ```
 
-### 4.2 QoS 对照表（重要）
+PC 端由 `setup.sh` 写入同样的两行。
 
-| 话题 | 可靠性 | 深度 | 说明 |
-|---|---|---|---|
-| `/cloud_registered` | RELIABLE | 100 | FAST-LIO2 默认值，桥接必须匹配 |
-| `/flmap/cloud` | RELIABLE（可调） | 1 | 33 kB/帧，重传代价极小；改 best_effort 需同步改 RViz |
-| `/flmap/map` | RELIABLE | 1 | PC 本地，不占网络 |
-| `/aft_mapped_to_init` | RELIABLE | 10 | 数据极小 |
+### 5.2 网卡绑定
 
-**QoS 是"成对匹配"语义，不是"自动降级"语义。** 实测（CycloneDDS 0.10 / Humble）：
-
-```
-发布端 RELIABLE  +  订阅端 BEST_EFFORT  ->  订阅端收到 0 帧
-发布端 BEST_EFFORT + 订阅端 RELIABLE    ->  收不到
-```
-
-两种不匹配的表现都是**静默的**：`ros2 topic list` 能看到话题，`ros2 topic info`
-能看到 publisher，但 `ros2 topic hz` 一条都没有。这是本仓库开发过程中真实踩过的坑：
-
-- 桥接最初用 BEST_EFFORT 订阅 `/cloud_registered`，而 FAST-LIO2 发布的是 RELIABLE
-  → 真机上会一帧都收不到（本地测试用的是 BEST_EFFORT 的合成源，恰好掩盖了问题）
-- RViz2 的 PointCloud2 显示项默认按 RELIABLE 订阅 → 若桥接发 BEST_EFFORT，画面永远是空的
-
-所以本仓库默认**全链路 RELIABLE**。要改成 best_effort 必须**成对改**：
-
-```yaml
-# 狗端 bridge_default.yaml
-output_reliability: "best_effort"
-```
-```yaml
-# PC 端 pc_view.yaml
-input_reliability: "best_effort"
-```
-```
-# RViz：Displays → Edge Frame (live) → Topic → Reliability Policy → Best effort
-```
-
-### 4.3 多播 vs 单播
-
-CycloneDDS 默认用多播做节点发现。在有线局域网里没问题，但在 Wi-Fi 上：
-
-- 很多 AP 对多播限速（最低 1–6 Mbps）或直接丢弃
-- 开了 AP 隔离的网络，多播完全不通
-
-症状：两边都起了节点，但要等几十秒才互相发现，或者一直发现不了。
-
-**先不要急着改配置。** 默认设置在家用路由器上通常能用。只有在
-`link_probe.sh` 第 4 层明确报"一个节点都没发现"、而 ping 通的时候，才启用单播模式：
+PC 上通常有多块网卡（有线、Wi-Fi、手机 USB 共享）。CycloneDDS 默认会在
+**所有网卡**上做发现，一旦它选了 Wi-Fi 那块，狗就找不到你。
 
 ```bash
-# 1. 复制模板，把 Peer 填成对端 IP（不是本机 IP）
-cp config/cyclonedds_unicast.xml.example config/dds_edge.xml   # 狗上：Peer = PC 的 IP
-cp config/cyclonedds_unicast.xml.example config/dds_pc.xml     # PC 上：Peer = 狗的 IP
-
-# 2. 改 NetworkInterface 的 name 为实际网卡名（ip -br addr 查）
-
-# 3. 启动前设置
-export CYCLONEDDS_URI=file:///绝对路径/dds_edge.xml     # 狗
-export CYCLONEDDS_URI=file:///绝对路径/dds_pc.xml       # PC
+# PC 上：只让 CycloneDDS 认有线口
+export CYCLONEDDS_URI='<CycloneDDS><Domain><General>
+  <Interfaces><NetworkInterface name="enp131s0"/></Interfaces>
+</General></Domain></CycloneDDS>'
 ```
 
-⚠️ Peer 写错会**静默失败**，症状和"完全没连上"一模一样。改之前先用默认配置确认能通。
+狗上**不要照抄这段** —— 见下面 5.2.1。
 
----
+**PC 端实测不需要设。** 本仓库在 PC 上不设 `CYCLONEDDS_URI`，CycloneDDS 的默认
+行为（在所有支持多播的网卡上发现）在这台机器上就选中了有线口，`link_probe.sh`
+的第 4 节能直接发现狗端三个节点。只有多网卡机器发现绑错时才需要上面的写法。
 
-## 5. 跨发行版互操作（Foxy ↔ Humble）
+#### 5.2.1 狗端有个版本陷阱（实测踩过）
 
-狗端 Ubuntu 20.04 + Foxy，PC 端 22.04 + Humble。这是**两个不同版本的 ROS 2**，
-DDS 层理论上互通，实践上要注意：
+`<Interfaces>` 这个元素是 CycloneDDS **0.9** 才引入的。而 Foxy 官方源里的
+`ros-foxy-cyclonedds` 是 **0.7.0**，读到这个元素会直接报
 
-**能通的部分**：`sensor_msgs/PointCloud2`、`nav_msgs/Odometry`、`nav_msgs/Path`、
-`tf2_msgs/TFMessage`、`std_msgs/*` 这些从 Foxy 到 Humble 消息定义没变，CDR 序列化一致。
+```
+config: //CycloneDDS/Domain/General: Interfaces: unknown element (… line 5)
+[ERROR] [rmw_cyclonedds_cpp]: rmw_create_node: failed to create domain, error Error
+```
 
-**可能不通的部分**：
+然后**任何节点都创建不出来**，一启动就退出。狗端 `~/.bashrc` 里 fishros 那段
+（登录时问 `ros:foxy(1) noetic(2) ?`）会在选 1 时 export 一个 0.9 语法的
+`~/cyclonedds_ws/cyclonedds.xml`，正好命中这个坑。
 
-- 自定义消息类型（本仓库不跨机器传自定义消息，`CustomMsg` 只在狗端本地用）
-- Iron/Jazzy 之后引入的 type hash 机制（Humble 还没启用，所以没这个问题）
-- 两端 RMW 版本差异过大时（Foxy 的 CycloneDDS 0.7 vs Humble 的 0.10）
+所以：
 
-**判定方法**：
+- **狗端不要设 `CYCLONEDDS_URI`**。默认多播发现已经选对 `eth0`（实测 DDS 全通）。
+- `scripts/edge_control.sh` 和 `scripts/pc_view.sh` 开头会主动 `unset CYCLONEDDS_URI`
+  并打印一行 `[info] 忽略继承来的 …`；确实要用自己的配置时加 `FLMAP_KEEP_CYCLONEDDS=1`。
+- PC 端 Humble 的 CycloneDDS 是 0.10+，上面的写法没问题。
+- 要写 xml 就先确认版本：`dpkg -l | grep cyclonedds`。
+
+### 5.3 多播还是单播
+
+**有线默认用多播，不要改。** 交换机对多播的处理是确定的，Wi-Fi 时代那些
+"多播被 AP 限速/丢弃"的坑在有线上不存在。
+
+只有当交换机做了**端口隔离**（每个口一个 VLAN，互不可见）时，才需要切单播：
 
 ```bash
-# PC 上
-ros2 topic list                 # 能看到 /flmap/cloud 吗？
-ros2 topic info /flmap/cloud -v # 能看到 publisher 的 GID 吗？
-ros2 topic hz /flmap/cloud      # 有频率吗？
+# 模板在 config/cyclonedds_unicast.xml.example
+export CYCLONEDDS_URI=file:///绝对路径/dds_edge.xml
 ```
 
-能看到 topic 但没有数据 = QoS 或类型不匹配；看不到 topic = 发现层没通。
+判断是否被隔离：`ping` 通但 `ros2 node list` 看不到对方 —— 典型特征。
 
-**回退方案（按推荐顺序）**：
+### 5.4 QoS 对照表
 
-1. **PC 上跑 Foxy 容器**（最稳）：
+跨机器传点云，发布端和订阅端的可靠性策略必须**匹配或兼容**，否则静默丢数据：
 
-   ```bash
-   docker run -it --rm --net=host --ipc=host \
-     -e DISPLAY=$DISPLAY -e ROS_DOMAIN_ID=42 \
-     -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
-     -v /tmp/.X11-unix:/tmp/.X11-unix \
-     ros:foxy \
-     bash -c "apt update && apt install -y ros-foxy-rviz2 ros-foxy-rmw-cyclonedds-cpp && rviz2"
-   ```
+| 话题 | 发布端 | 订阅端（RViz） |
+|---|---|---|
+| `/flmap/cloud` | RELIABLE | **RELIABLE** |
+| `/cloud_registered` | RELIABLE | RELIABLE |
+| `/aft_mapped_to_init` | RELIABLE | RELIABLE |
 
-   注意：容器里没有本仓库的 `flmap_accumulator`，此时用 `pc_view.sh --raw` 只看当前帧，
-   或者把仓库挂载进容器编译一份。
+> RViz 的 `PointCloud2` 显示项默认是 `Best effort`，而本仓库的发布端是
+> `RELIABLE`。两者**可以**互通（订阅端要求更弱即可兼容），但如果发现
+> "有话题没画面"，先把 RViz 里那一项改成 `Reliable` 试一次。
 
-2. **录包离线看**：狗端 `start` → 走完 → `stop`，把 bag 拷回 PC 用本仓库回放
-   （见 [04-pc-visualization.md](04-pc-visualization.md) 的离线回放一节）。
+## 6. 跨发行版互操作（Foxy ↔ Humble）
 
----
+狗端 Ubuntu 20.04 + ROS 2 Foxy，PC 端 22.04 + Humble。RTPS 线协议兼容，
+`PointCloud2` / `Odometry` / `TFMessage` 这些基础消息在实际部署中可直接互通。
 
-## 6. 症状 → 处置表
+前提仍是那三个一致：domain id、RMW 实现、网卡。
+
+如果 `ping` 通、`ros2 node list` 仍然看不到对方，按顺序试：
+
+1. 两端 `unset CYCLONEDDS_URI`，用纯默认配置试一次
+2. 检查 `ROS_LOCALHOST_ONLY` 是不是被设成了 1（应该是 0 或未设置）
+3. PC 上跑 Foxy 容器（`osrf/ros:foxy-desktop`，host 网络）
+4. 退到离线：狗端录包，拷到 PC 上 `ros2 bag play` 看
+
+## 7. 症状 → 处置
 
 | 症状 | 最可能的原因 | 处置 |
 |---|---|---|
-| `ping` 不通 | 不同网段 / AP 隔离 / 没连同一个 Wi-Fi | `ip -br addr` 对比前三段；关路由器 AP 隔离 |
-| `ping` 通，`ros2 node list` 空 | DOMAIN_ID 或 RMW 不一致 | 两端 `echo $ROS_DOMAIN_ID $RMW_IMPLEMENTATION` 必须一样 |
-| 能看到节点，看不到话题 | 节点还没发布 / 话题名不同 | `ros2 topic list` 对比；看狗端 `status` |
-| 话题在，`ros2 topic hz` 无输出 | **QoS 不匹配**（最高频原因） | 用 `tools/bench_bridge.py --best-effort` 反向验证；见 §4.2 |
-| 有数据但只有 1–2 Hz | 链路丢包 / 省电模式 | 关 power_save；降到 5 GHz；看 `link_probe` 抖动 |
-| 画面卡 3–10 秒后突然追上 | 重传队列堆积（链路质量差） | 先看 `link_probe` 抖动；必要时两侧一起降 QoS + 降 `max_rate_hz` |
-| RTT 从 3 ms 跳到 100 ms | Wi-Fi 省电 / 漫游 | `iw dev wlan0 set power_save off`；固定 AP |
-| 狗端能 ping 通 PC，PC 不能 ping 狗 | PC 防火墙 | `sudo ufw allow from 192.168.123.0/24` |
+| `ping .18` 不通 | 网线没插 / 交换机没电 / IP 没配上 | `cat /sys/class/net/enp131s0/carrier` 必须是 1 |
+| `ping` 通但 `ros2 topic list` 空 | domain id 不一致 / RMW 不一致 / 绑错网卡 | 逐个核对 §5.1 |
+| 只看到自己的节点 | 多播被隔离，或 `ROS_LOCALHOST_ONLY=1` | §5.3、`env \| grep ROS_` |
+| 有话题但 RViz 没画面 | QoS 不匹配 / Fixed Frame 不是 `map` / 时间戳过期 | 先改 Reliable，再查 Fixed Frame |
+| RViz 报 `Message Filter dropping message` | **两端时钟差太多** | 见 [09-time-sync.md](09-time-sync.md) |
+| 点云显示但位置飘 | 雷达外参 / 时间戳不同步 | [08-hardware.md](08-hardware.md)、[07-gap-fix.md](07-gap-fix.md) |
+| PC 整个断网 | 给有线口设了默认网关 | §3.3，删掉网关 |
 
----
+## 8. 和 Wi-Fi 模式比，省掉了什么
 
-## 7. 用 link_probe.sh 定位
+[FLMap.2](https://github.com/cj126050/FLMap.2) 走 Wi-Fi，要处理：狗的 AP 模式与
+STA 模式切换、跨网段路由、NAT 与回程路由、多播被 AP 限速、省电模式导致的
+30+ ms 抖动、信道干扰。
 
-```bash
-./scripts/link_probe.sh          # 常规体检
-./scripts/link_probe.sh --bw     # 附带 iperf3 原始带宽（两端都要装 iperf3）
-```
+有线模式下这一整列问题**不存在**：
 
-它按四层依次检查，**哪一层先红，问题就在哪一层，不要跳着看**：
+| Wi-Fi 要处理的 | 有线 |
+|---|---|
+| 跨网段 `12.x ↔ 123.x` | 同网段，没有 |
+| 运控要不要转发 / 要不要 NAT | 不经过运控，无关 |
+| 多播被 AP 丢弃 | 交换机正常转发 |
+| `power_save` 让抖动飙到 40 ms | 抖动稳定在 0.1 ms |
+| ch149 和邻居路由打架 | 没有共享介质 |
+| 狗端没有射频，得插 USB 网卡 | 网口本来就有 |
 
-```
-1. 本机网络      走的是无线还是有线？有没有到对端的路由？
-2. 连通性与时延  丢包 / 平均 RTT / 抖动 / 最大 RTT
-3. SSH           部署通道是否可用
-4. DDS 发现      能不能看到对端节点
-5. 点云流        应用层，最能说明问题：/flmap/cloud 的实际频率与带宽
-```
-
-判据（脚本里使用的阈值）：
-
-| 指标 | 健康 | 需要处理 |
-|---|---|---|
-| 丢包 | < 2 % | > 2 % 说明物理层就有问题 |
-| 平均 RTT | < 30 ms | > 30 ms 链路拥塞或速率协商过低 |
-| 抖动（mdev） | < 20 ms | > 20 ms 画面必然一顿一顿 |
-| `/flmap/cloud` 频率 | 4–5 Hz | < 3.5 Hz 需要降参（见 05 文档） |
+代价只有一个：**狗被线拴住了**。室内固定场地建图、跑数据集、调参，
+这个代价可以接受；要狗满屋跑，回去用 FLMap.2。

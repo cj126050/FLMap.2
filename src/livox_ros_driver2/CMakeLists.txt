@@ -328,10 +328,11 @@ else(ROS_EDITION STREQUAL "ROS2")
     ament_lint_auto_find_test_dependencies()
   endif()
 
+  # 只安装 launch_ROS2：早期补丁把 ROS1 的 launch 也转成了 .py 放进 launch/，
+  # 两个目录一旦有同名文件，ros2 launch 会报 "found more than once" 并拒绝启动。
   ament_auto_package(INSTALL_TO_SHARE
     config
     launch_ROS2
-    launch
   )
 
 endif()

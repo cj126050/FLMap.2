@@ -199,11 +199,28 @@ else
     note "RMW_IMPLEMENTATION" warn "未设置，脚本会自动导出 rmw_cyclonedds_cpp"
 fi
 
-# bag 转换依赖
-if /usr/bin/python3 -c "import rosbag2_py" >/dev/null 2>&1; then
-    note "rosbag2_py (PCD 转换依赖)" pass
+# PCD 导出依赖
+# 这里有两种现实：
+#   1) rosbag2_py 只有在 source 过 ROS 环境后才在 PYTHONPATH 里，裸跑必然误报；
+#   2) 狗端镜像**确实没装 ros-foxy-rosbag2-py**（`ros2 bag` 命令行在，Python 绑定缺），
+#      所以 source 之后导入失败也是真的。
+# 但 bag_to_pcd.py 支持直接读 .db3（sqlite3 + rclpy 是基础包，一定在），
+# 所以"没有 rosbag2_py"不再等于"导不出"，判定要看有没有可用的回退路径。
+_bag_setup=""
+for _d in "${ROS_DISTRO:-}" foxy humble; do
+    [ -n "$_d" ] && [ -f "/opt/ros/$_d/setup.bash" ] && { _bag_setup="/opt/ros/$_d/setup.bash"; break; }
+done
+_bag_probe() {
+    [ -n "$_bag_setup" ] || return 1
+    bash -c "source '$_bag_setup' >/dev/null 2>&1; /usr/bin/python3 -c '$1'" >/dev/null 2>&1
+}
+if _bag_probe 'import rosbag2_py, rclpy'; then
+    note "PCD 导出 (rosbag2_py)" pass
+elif _bag_probe 'import sqlite3, rclpy, numpy; from rosidl_runtime_py.utilities import get_message'; then
+    # 狗端的正常状态：没有 rosbag2_py，但能直读 db3。不是缺陷，不报红。
+    note "PCD 导出 (sqlite3 直读回退)" pass
 else
-    note "rosbag2_py (PCD 转换依赖)" warn "系统 python3 缺 rosbag2_py，可能影响自动 PCD 转换（不影响建图本身）"
+    note "PCD 导出依赖" warn "缺少 rosbag2_py 且无法直读 db3：检查 /usr/bin/python3 是否有 rclpy、numpy（只影响 PCD 导出，不影响建图）"
 fi
 
 # 磁盘空间

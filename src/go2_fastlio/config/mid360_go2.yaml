@@ -2,7 +2,9 @@
 
 /fastlio2_mapping:
   ros__parameters:
-    use_sim_time: true
+    # 实时建图必须 false：实时数据没有 /clock，设 true 会让节点一直等时钟而挂住。
+    # 离线回放录制包时用命令行覆盖：use_sim_time:=true
+    use_sim_time: false
 
     # ========== 话题配置 ==========
     common/lid_topic: "/livox/lidar"

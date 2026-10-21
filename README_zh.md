@@ -5,6 +5,13 @@
 
 `ROS 2 Foxy（狗端）` · `ROS 2 Humble（PC 端）` · `Livox Mid360` · `FAST-LIO2` · `BSD-3-Clause`
 
+> **本仓库 = 无线包。** 有线那条路（千兆交换机）是同源的
+> **[FLMap.3](https://github.com/cj126050/FLMap.3)**。两个仓库的机器人代码相同，
+> 差别只有一层：`scripts/lib_link.sh` —— 目标地址、期望网口、信号/速率判据、
+> 失败提示都收在这一个文件里。**改链路只改它，改业务不碰它。**
+> 本包的巡检脚本、扫描脚本、控制台与 FLMap.3 是同一份代码，所以那边修好的
+> 假阴性/时序坑这边同样生效，不需要各自打补丁。
+
 ---
 
 ## 一、为什么要有第二版
@@ -64,19 +71,34 @@ FLMap.2/
 │   ├── flmap_accumulator/   # ★ 新增  PC 端：多帧累积成地图 → /flmap/map
 │   └── flmap_bringup/       # ★ 新增  双端 launch 文件 + RViz 配置
 ├── scripts/
+│   ├── lib_link.sh          # ★ 链路层：唯一知道"无线长什么样"的文件（与 FLMap.3 的唯一差别）
+│   ├── pc_hotspot.sh        # ★ 主机开 5 GHz 热点（AP）
+│   ├── dog_wlan_probe.sh    # ★ 狗端网卡体检（lsusb / 驱动 / 支持模式）
+│   ├── dog_wlan_join.sh     # ★ 狗端连入热点 + 静态 10.42.0.18 + 开机自连
+│   ├── wifi_link_check.sh   # 四段式无线链路体检（主机/运控/狗/回程）
+│   ├── dds_bind.sh          # 按到目标的路由绑定 CycloneDDS 网卡（与链路无关）
+│   ├── pc_dds_peer.sh       # 可选：单播发现（多播被 AP 丢弃时的备手）
 │   ├── deploy_edge.sh       # 同步到狗 + 打 Foxy 补丁 + 远程编译
-│   ├── edge_control.sh      # 狗端交互控制台（不起 RViz）
-│   ├── pc_view.sh           # PC 端一键远程可视化
+│   ├── edge_control.sh      # 狗端交互控制台（不起 RViz），--auto N 无人值守
+│   ├── edge_scan.sh         # PC 端一条命令：扫 N 秒 → 导 PCD → 拉回 → 校验
+│   ├── pc_view.sh           # PC 端一键远程可视化（没 GPU 时自动软件渲染）
+│   ├── pcd_preview.py       # PCD 转 PNG（不用 RViz、不用 GPU）
+│   ├── clock_sync.sh        # 时间同步：PC 授时 + 狗端校准
 │   ├── link_probe.sh        # 四层链路体检（物理→网络→DDS→应用）
 │   ├── patch_foxy.sh        # Humble → Foxy 源码补丁（幂等）
 │   ├── env_check.sh         # 环境体检报告
-│   └── legacy/              # 旧的有线直连脚本，仅留档
+│   └── legacy/              # 旧架构留档
+│       ├── mid360_control.sh, online_mapping.sh   # 雷达直连 PC 的单机版
+│       └── wifi-scheme-c/   # 方案 C（借狗自带 Wi-Fi）的探针，已证伪
 ├── config/
 │   └── cyclonedds_unicast.xml.example   # 可选：关多播走单播发现
-├── tools/
+├── tools/                   # 与 FLMap.3 同一份
+│   ├── clock/               # 授时服务端 + 狗端校准工具
+│   ├── diag/                # 诊断（见 docs/10）
+│   ├── sim/                 # 无硬件的半实物仿真（见 docs/16）
 │   ├── fake_cloud.py        # 没有雷达也能压测的合成点云源
 │   └── bench_bridge.py      # 量任意话题的真实帧率/带宽
-└── docs/                    # 八篇文档，建议按编号读
+└── docs/                    # 十九篇，按编号读；无线本体是 17
 ```
 
 ## 三、快速开始
@@ -193,7 +215,17 @@ python3 tools/bench_bridge.py --seconds 8
 | [06-troubleshooting.md](docs/06-troubleshooting.md) | 按症状索引的排查手册 | 出问题时 |
 | [07-gap-fix.md](docs/07-gap-fix.md) | 数据断流导致的点云发散修复 | 点云突然飞走 |
 | [08-hardware.md](docs/08-hardware.md) | Mid360 接线、IP 配置、安装姿态、与内置 L1 共存 | 装雷达时 |
-| [09-wireless-link.md](docs/09-wireless-link.md) | 拓展坞没有无线射频的事实、四条通路的成本与风险、USB 网卡选芯片 | **想让狗脱离网线时** |
+| [09-time-sync.md](docs/09-time-sync.md) | 两端时间戳对齐、PC 授时 | 时间差报警时 |
+| [10-pitfalls.md](docs/10-pitfalls.md) | 踩过的坑合集（含点云分量串位的前后对比图） | 出怪问题时 |
+| [11-runbook.md](docs/11-runbook.md) | 一页操作手册（开机到出图） | 每次上手 |
+| [12-handbook.md](docs/12-handbook.md) | 通俗版原理，不堆术语 | 给不熟 ROS 的人看 |
+| [13-shutdown.md](docs/13-shutdown.md) | 收工顺序、断电注意 | 每次收工 |
+| [14-3dgs-and-slam.md](docs/14-3dgs-and-slam.md) | 3DGS 与 3DGS-SLAM 路线与算力判断 | 想做重建 |
+| [15-3dgs-pipeline.md](docs/15-3dgs-pipeline.md) | 3DGS 离线流水线与参数 | 跑 3DGS |
+| [16-semi-edge-sim.md](docs/16-semi-edge-sim.md) | 无硬件也能验的仿真链路 | 没狗在手上时 |
+| [17-wireless-link.md](docs/17-wireless-link.md) | ★ **无线链路本体**：主机开 AP、狗连入、监管域、DDS 网卡绑定、实测数字 | **本包的核心，先看这篇** |
+| [18-local-operation.md](docs/18-local-operation.md) | ★ 从开机到 PCD 回传的完整命令串 | 现场照着敲 |
+| [19-wireless-selection.md](docs/19-wireless-selection.md) | 历史选型：四条通路的成本与风险、方案 C 为何证伪 | 想知道"为什么不用狗自带 Wi-Fi" |
 
 ## 六、兼容性与已知限制
 

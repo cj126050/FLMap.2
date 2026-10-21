@@ -15,9 +15,9 @@
 #    ./scripts/deploy_edge.sh --no-delete     # 只增不删，也不检查冲突
 #
 #  环境变量:
-#    EDGE_HOST  狗端 IP        默认 192.168.123.18
+#    EDGE_HOST  狗端 IP        默认取 scripts/lib_link.sh 的链路目标
 #    EDGE_USER  狗端用户名      默认 unitree
-#    EDGE_WS    狗端工作空间    默认 ~/flmap_ws
+#    EDGE_WS    狗端工作空间    默认取 scripts/lib_link.sh 的 LINK_EDGE_WS
 #
 #  ⚠️ 安全设计：默认**不做删除同步**。如果远端 src/ 里有本仓库没有的包
 #     （例如你自己加的 l1_bridge、私有节点），脚本会直接拒绝并列出这些包，
@@ -29,10 +29,13 @@
 
 set -uo pipefail
 
-EDGE_HOST="${EDGE_HOST:-192.168.123.18}"
-EDGE_USER="${EDGE_USER:-unitree}"
-EDGE_WS="${EDGE_WS:-~/flmap_ws}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# 目标地址与狗端工作空间都由链路层决定。
+# shellcheck source=lib_link.sh
+source "$REPO_DIR/scripts/lib_link.sh"
+EDGE_HOST="${EDGE_HOST:-$(link_resolve)}"
+EDGE_USER="${EDGE_USER:-unitree}"
+EDGE_WS="${EDGE_WS:-$LINK_EDGE_WS}"
 # accept-new：首次连接自动记录主机密钥，之后强制校验（比 StrictHostKeyChecking=no 安全，
 # 又不像默认 ask 那样在 BatchMode 下直接失败——这是新机器上最常见的"免密配好了却连不上"）。
 # UserKnownHostsFile 显式指定：某些环境里 ssh 取的是 passwd 的 home（如以 root 运行但
@@ -70,7 +73,7 @@ die() { echo -e "${R}[fail]${N} $*"; exit 1; }
 say "检查到 ${EDGE_USER}@${EDGE_HOST} 的连接…"
 if ! $SSH true 2>/dev/null; then
     die "ssh 不通。先确认：
-      - PC 已连上狗（有线 192.168.123.10/24 或 Wi-Fi 同网段）
+      - PC 有线口已配 192.168.123.10/24，与狗同在一个交换机
       - ping ${EDGE_HOST} 通
       - 已 ssh-copy-id ${EDGE_USER}@${EDGE_HOST}"
 fi
@@ -102,7 +105,7 @@ if [ -n "$EXTRA" ] && [ "$ALLOW_DELETE" != "1" ] && [ "$NO_DELETE" != "1" ]; the
     echo "$EXTRA" | sed 's/^/         /'
     warn "默认拒绝删除。三种处理方式："
     echo "         1) 换一个干净目录部署（推荐，彼此不干扰）："
-    echo "            EDGE_WS=~/flmap2_ws ./scripts/deploy_edge.sh"
+    echo "            EDGE_WS=${LINK_EDGE_WS} ./scripts/deploy_edge.sh"
     echo "         2) 保留这些包继续部署（不做删除同步）："
     echo "            ./scripts/deploy_edge.sh --no-delete"
     echo "         3) 确认可以丢弃它们："

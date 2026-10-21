@@ -1,21 +1,29 @@
 #!/bin/bash
 # =============================================================
-#  link_probe.sh —— 无线链路体检（在 PC 上跑）
+#  link_probe.sh —— 链路体检（在 PC 上跑）
 #
 #  这个脚本回答一个问题：**PC 到底能不能稳定收到狗端的点云？**
-#  它按"物理层 → 网络层 → DDS 层 → 应用层"四层依次测，
-#  哪一层先红，问题就在哪一层。对应排查步骤见 docs/network-and-dds.md。
+#  它按"物理/网络层 → 连通性 → SSH → DDS 层 → 应用层"依次测，
+#  哪一层先红，问题就在哪一层。对应排查步骤见 docs/02-network-and-dds.md。
+#
+#  ★ 本文件在 FLMap.2（无线包）和 FLMap.3（有线包）里是**同一份**。
+#    链路差异全部收在 scripts/lib_link.sh：目标地址、期望网卡、信号/速率判据、
+#    失败提示都由它提供。所以改体检逻辑不会让两包行为分叉，
+#    改链路判据也只需要动那一个文件。
 #
 #  用法:
 #    ./scripts/link_probe.sh
-#    EDGE_HOST=192.168.50.31 ./scripts/link_probe.sh
-#    ./scripts/link_probe.sh --bw        # 附带 iperf3 带宽测试（需两端都装了 iperf3）
+#    EDGE_HOST=192.168.123.161 ./scripts/link_probe.sh     # 测运控
+#    ./scripts/link_probe.sh --bw                          # 附带 iperf3 带宽测试
 # =============================================================
 
-set -uo pipefail
+set -o pipefail   # 注意：不开 set -u —— ROS 的 setup.bash 会引用未定义变量
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-EDGE_HOST="${EDGE_HOST:-192.168.123.18}"
+# shellcheck source=lib_link.sh
+source "$REPO_DIR/scripts/lib_link.sh"
+
+EDGE_HOST=$(link_resolve 10)
 EDGE_USER="${EDGE_USER:-unitree}"
 ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 export ROS_DOMAIN_ID
@@ -38,37 +46,54 @@ for d in humble foxy; do
 done
 [ -f "$REPO_DIR/install/setup.bash" ] && source "$REPO_DIR/install/setup.bash"
 
-echo -e "${B}链路体检${N}  目标 ${EDGE_HOST}  DOMAIN ${ROS_DOMAIN_ID}  RMW ${RMW_IMPLEMENTATION}"
+echo -e "${B}链路体检${N}  ${LINK_KIND} · 目标 ${EDGE_HOST}  DOMAIN ${ROS_DOMAIN_ID}  RMW ${RMW_IMPLEMENTATION}"
+echo "  链路: ${LINK_DESC}"
 
 # ---------------------------------------------------------------- 1. 物理/网络
 say "1. 本机网络"
 ip -br addr show 2>/dev/null | awk '$1!="lo"{printf "  %-12s %-8s %s\n", $1, $2, $3}'
+
+# 本机地址是后面所有测试的前提：缺了它，每条都会失败，而且报错会指向
+# "狗没开机""雷达坏了"，全是假线索。先把这个前提单独说清楚。
+link_check_local
+LOCAL_OK=$?
+
 ROUTE_IF=$(ip route get "$EDGE_HOST" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
 [ -n "$ROUTE_IF" ] && echo "  到 ${EDGE_HOST} 走: ${ROUTE_IF}"
-case "$ROUTE_IF" in
-    wl*) pass "走无线网卡（预期）" ;;
-    "")  fail "没有到 ${EDGE_HOST} 的路由 —— 不在同一网段，或没连上狗" ;;
-    *)   warn "走的是有线口 ${ROUTE_IF}，不是无线 —— 你是不是还插着网线？" ;;
-esac
+link_check_iface "$ROUTE_IF"
 
+# ---------------------------------------------------------------- 2. 连通性
 say "2. 连通性与时延（20 包）"
 PING=$(ping -c 20 -i 0.2 -W 1 "$EDGE_HOST" 2>/dev/null)
 if echo "$PING" | grep -q "0% packet loss\|[1-9][0-9]* received"; then
     LOSS=$(echo "$PING" | sed -n 's/.*, \([0-9.]*\)% packet loss.*/\1/p')
-    STATS=$(echo "$PING" | awk -F'/' '/rtt|round-trip/{print $4, $5, $6}')
-    AVG=$(echo "$STATS" | awk '{print $2}')
-    MDEV=$(echo "$STATS" | awk '{print $3}')
-    MAX=$(echo "$STATS" | awk '{print $4}')
-    echo "  丢包 ${LOSS:-?}%  平均 ${AVG:-?} ms  抖动 ${MDEV:-?} ms  最大 ${MAX:-?} ms"
-    awk -v l="${LOSS:-0}" 'BEGIN{exit !(l>2)}'  && fail "丢包 ${LOSS}% > 2% —— 距离/干扰/信道问题"  || pass "丢包正常"
-    awk -v a="${AVG:-0}"  'BEGIN{exit !(a>30)}' && fail "平均 RTT ${AVG} ms > 30 ms —— 链路拥塞或速率协商过低" || pass "时延正常"
-    awk -v m="${MDEV:-0}" 'BEGIN{exit !(m>20)}' && warn "抖动 ${MDEV} ms 偏大 —— 点云会一顿一顿" || pass "抖动正常"
+    # ping -q 的统计行：rtt min/avg/max/mdev = a/b/c/d ms
+    # 用 '/' 切之后 $4="mdev = a"、$5=b(avg)、$6=c(max)、$7="d ms"
+    LINE=$(echo "$PING" | grep -E 'rtt|round-trip' | tail -1)
+    MIN=$(echo "$LINE" | awk -F'/' '{n=split($4,a," "); print a[n]}')
+    AVG=$(echo "$LINE" | awk -F'/' '{print $5}')
+    MAX=$(echo "$LINE" | awk -F'/' '{print $6}')
+    MDEV=$(echo "$LINE" | awk -F'/' '{print $7}' | awk '{print $1}')
+    echo "  丢包 ${LOSS:-?}%  RTT min/avg/max = ${MIN:-?}/${AVG:-?}/${MAX:-?} ms  抖动 ${MDEV:-?} ms"
+    # 本机没配地址时，100% 丢包与链路无关，别往物理层引
+    if [ "$LOCAL_OK" != "0" ]; then
+        fail "丢包 ${LOSS}% —— 根因在 §1（本机没有 ${LINK_LOCAL_PREFIX}x），配好地址再测"
+    else
+        awk -v l="${LOSS:-0}" 'BEGIN{exit !(l>2)}' \
+            && fail "丢包 ${LOSS}% > 2% —— 查物理层：${LINK_DESC}" || pass "丢包正常"
+    fi
+    read -r AMAX JMAX <<< "$(link_latency_limits)"
+    # ping 全丢时统计行里是 "?/?/?"，这时候再说"时延正常"是假绿灯，直接跳过。
+    if [ -n "$AVG" ] && [ -n "$MDEV" ]; then
+        awk -v a="$AVG" -v t="$AMAX" 'BEGIN{exit !(a>t)}' \
+            && fail "平均 RTT ${AVG} ms > ${AMAX} ms —— 不正常，查本机负载 / 物理层" \
+            || pass "时延正常"
+        awk -v m="$MDEV" -v t="$JMAX" 'BEGIN{exit !(m>t)}' \
+            && warn "抖动 ${MDEV} ms 偏大 —— 点云会一顿一顿" || pass "抖动正常"
+    fi
 else
     fail "ping 不通 —— 先解决这一层，后面的检查都没意义"
-    echo -e "\n${Y}排查顺序${N}:"
-    echo "  1) 狗和 PC 连的是同一个 Wi-Fi 吗？狗端 ip -br addr 看有没有 wlan0 地址"
-    echo "  2) 狗端有没有开热点/换过网段？两边前三段必须一致"
-    echo "  3) 路由器是否开了 AP 隔离（客户端互相不可见）—— 关掉它"
+    link_check_hints
     exit 1
 fi
 
@@ -78,39 +103,65 @@ if timeout 6 ssh -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=n
         -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
         "${EDGE_USER}@${EDGE_HOST}" true 2>/dev/null; then
     pass "免密 ssh 可用"
+    EDGE_CLOCK=$(timeout 6 ssh -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        "${EDGE_USER}@${EDGE_HOST}" 'date +%s' 2>/dev/null)
+    if [ -n "$EDGE_CLOCK" ]; then
+        SKEW=$(( $(date +%s) - EDGE_CLOCK ))
+        SKEW=${SKEW#-}
+        if [ "$SKEW" -le 1 ]; then
+            pass "两端时间差 ≤ ${SKEW}s"
+        else
+            warn "两端时间差 ${SKEW}s —— 建图前先跑 ./scripts/clock_sync.sh start && check"
+        fi
+    fi
 else
     warn "免密 ssh 不可用 —— deploy_edge.sh 会失败；执行 ssh-copy-id ${EDGE_USER}@${EDGE_HOST}"
 fi
 
 # ---------------------------------------------------------------- 4. DDS
-say "4. DDS 发现（跨机器发现节点）"
-NODES=$(timeout 10 ros2 node list 2>/dev/null)
-if [ -n "$NODES" ]; then
-    CNT=$(echo "$NODES" | grep -c .)
-    echo "$NODES" | sed 's/^/    /' | head -8
-    if echo "$NODES" | grep -q "flmap_bridge"; then
-        pass "发现狗端节点（含 flmap_bridge）"
-    else
-        warn "能发现 ${CNT} 个节点，但没看到 flmap_bridge —— 狗端可能没启动，或只发现到本机节点"
-    fi
+say "4. DDS 发现（PC 能否看到狗端节点）"
+# 这一节只证明一件事：DDS 图通了（PC 看得到狗端节点）。
+# 以前这里自造一个 String 话题跨机 pub/echo，实测不可靠：点云 9.5 Hz 正常、
+# 节点也发现得到，自造话题却两个方向都报 0（狗端 echo 起得比 pub 晚、ssh 后台
+# 进程的时序都不稳）。会误报的探针比没有更糟，所以删掉。
+#
+# 数据层交给第 5 节：/flmap/cloud 有没有 10 Hz，那才是真正的主数据流。
+NODES=$(timeout 12 ros2 node list 2>/dev/null)
+if echo "$NODES" | grep -q "flmap_bridge"; then
+    pass "发现狗端 flmap_bridge 节点 —— DDS 发现层双向可达"
+elif [ -n "$NODES" ]; then
+    warn "看到 $(echo "$NODES" | grep -c .) 个本机节点，但没有狗端节点 —— 狗端建图可能没 start"
 else
-    fail "一个节点都没发现 —— DDS 没通。检查两侧 ROS_DOMAIN_ID 与 RMW_IMPLEMENTATION 是否一致"
+    fail "一个节点都没发现 —— DDS 没通"
+    echo "     1) 两端 RMW 是否一致：PC=${RMW_IMPLEMENTATION}，狗端 .bashrc 里是什么"
+    echo "     2) 网卡绑定：bash scripts/dds_bind.sh pc 生成配置，再 export CYCLONEDDS_URI"
 fi
+
+# 无论发现成不成功，把多播出口报出来 —— 这里错了的表现是"单向不通"，很难自己想得到
+DD_IF=$(ip route get 239.255.0.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
+link_check_multicast "$DD_IF" "$ROUTE_IF"
 
 # ---------------------------------------------------------------- 5. 应用层
 say "5. 点云流（应用层，最能说明问题）"
-RATE=$(timeout 8 ros2 topic hz /flmap/cloud 2>/dev/null | grep -m1 "average rate" | awk '{print $3}')
+RATE=$(PYTHONUNBUFFERED=1 timeout 8 ros2 topic hz /flmap/cloud 2>/dev/null | grep -m1 "average rate" | awk '{print $3}')
 if [ -n "$RATE" ]; then
     echo "  /flmap/cloud ≈ ${RATE} Hz"
-    awk -v r="$RATE" 'BEGIN{exit !(r<3.5)}' \
-        && warn "帧率 ${RATE} Hz 低于目标 5 Hz —— 看狗端 stats 确认是不是限流/丢帧" \
+    # 桥接默认目标 10 Hz（max_rate_hz: 10.0）
+    awk -v r="$RATE" 'BEGIN{exit !(r<8.0)}' \
+        && warn "帧率 ${RATE} Hz 低于目标 10 Hz —— 看狗端 stats 确认是不是限流/丢帧" \
         || pass "帧率达标"
 else
-    fail "/flmap/cloud 无数据 —— 狗端建图或桥接没起来"
+    fail "/flmap/cloud 无数据 —— 狗端建图或桥接没起来（scripts/edge_control.sh status）"
 fi
 
 BW=$(timeout 8 ros2 topic bw /flmap/cloud 2>/dev/null | grep -m1 -oE "[0-9.]+ [kMG]B/s" | head -1)
-[ -n "$BW" ] && echo "  /flmap/cloud 带宽 ≈ ${BW}"
+[ -n "$BW" ] && link_bandwidth_note "$BW"
+
+# 有数据但形状可疑 —— 这是"分量串位"的典型场景，必须单独提示
+if [ -n "$RATE" ] && [ -f "$REPO_DIR/tools/diag/cloud_stat.py" ]; then
+    echo "  想确认点云内容是否正常： python3 tools/diag/cloud_stat.py -t /flmap/cloud -n 1"
+fi
 
 # ---------------------------------------------------------------- 6. 带宽（可选）
 if [ "$WITH_BW" = "1" ]; then
@@ -135,5 +186,5 @@ if [ ${#VERDICT[@]} -eq 0 ]; then
     echo -e "  ${G}链路健康，直接 ./scripts/pc_view.sh${N}"
 else
     for v in "${VERDICT[@]}"; do echo -e "  ${Y}•${N} $v"; done
-    echo -e "\n  对应处置见 docs/network-and-dds.md 的「症状 → 处置」表"
+    echo -e "\n  对应处置见 docs/02-network-and-dds.md 的「症状 → 处置」表"
 fi
