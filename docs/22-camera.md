@@ -272,14 +272,53 @@ done
 
 ---
 
-## 8. 文件位置
+## 8. 收工与恢复
+
+### 拔线前
+
+推流服务不需要特意留着（狗一关机就没了），但**先停掉再拔线**更干净，
+避免相机句柄没释放、下次开机被僵死进程占着：
+
+```bash
+ssh unitree@192.168.123.18 '/tmp/stop_stream.sh'
+# 或直接：for p in $(pgrep -x python3); do tr "\0" " " </proc/$p/cmdline | grep -q "mvs_stre""am.py" && kill -9 $p; done
+```
+
+拔网线、拔相机都没问题。git 工作区干净的话（`git status --short` 无输出），
+直接断电即可，编译产物留在 `build/` 和 `install/` 里不会丢。
+
+### 明天回来
+
+狗上放了一键恢复脚本 `~/cam_resume.sh`（两包 `scripts/cam_resume.sh` 同源）：
+
+```bash
+ssh unitree@192.168.123.18 'bash ~/cam_resume.sh'
+```
+
+它会依次做三件事，每步都有明确输出：
+
+1. **查相机**：确认 `2bdf:0001` 在，且是 5000M 链路；不在就直说该查哪个口
+2. **查时钟**：打印偏差。狗无 RTC 电池，断电后时间必回退，
+   但 `go2-clock-pull.timer` 每 30s 以 root 自动校准，一般不用管。
+   手工跑要 `sudo`，否则 `/var/lib/go2-clock/state.tmp` 会 `Permission denied`
+   （只报错不生效，容易误以为时间已经对了）
+3. **起推流**：`setsid` 拉起，8 秒后打印日志和 `/stats`
+
+> **脚本必须放在持久目录**。`mvs_stream.py` 早期只在 `/tmp/` 里，
+> 而 `/tmp` 重启即清空 —— 恢复脚本会去 `~/flmap3_ws/tools/` 和
+> `~/FLMap.3/tools/` 找，两处都没有就提示从主机 scp 一份。
+
+---
+
+## 9. 文件位置
 
 | 文件 | 位置 | 说明 |
 |---|---|---|
-| `tools/mvs_stream.py` | 两包一致 | 狗端推流服务 |
+| `tools/mvs_stream.py` | 两包一致；狗上装到 `~/flmap3_ws/tools/` | 狗端推流服务 |
 | `scripts/cam_view.sh` | 两包一致 | 主机端查看 / 截图 |
+| `scripts/cam_resume.sh` | 两包一致；狗上另存 `~/cam_resume.sh` | 开机后一键恢复（查相机 → 查时钟 → 起推流） |
 | `scripts/dog_camera_check.sh` | 两包一致 | 狗端相机硬件体检（视频节点 / USB / i2c / Argus / xudc 五环） |
-| `/tmp/cam.log` | 狗端 | 服务日志 |
+| `/tmp/cam.log` | 狗端 | 服务日志（**`/tmp` 重启即清空，别把脚本放这儿**） |
 
-`tools/mvs_stream.py` 和 `scripts/cam_view.sh` 不涉及链路细节，所以两个包里
-是**同一份文件**；地址一律通过 `lib_link.sh` 的 `link_resolve` 取，不写死。
+这三个脚本不涉及链路细节，所以两个包里都是**同一份文件**；地址一律通过
+`lib_link.sh` 的 `link_resolve` 取，不写死。
