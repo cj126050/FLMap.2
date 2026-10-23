@@ -157,7 +157,15 @@ if [ "${WATCH:-0}" -gt 0 ]; then
     sec "热插拔监听 ${WATCH}s"
     warn "现在开始计时 —— 请把相机拔下，停 3 秒，再插回去"
     echo
-    timeout "$WATCH" "${SSH[@]}" "sudo -n dmesg -w 2>/dev/null | grep -m20 -Ei 'usb|imx219|video|uvc'" 2>&1 | sed 's/^/     /'
+    # 坑：dmesg -w 会先把整个启动缓冲区重放一遍，grep -m 数够行数就退出，
+    # 结果监听根本没建立。必须先量基线行数，只取基线之后的新行。
+    timeout "$WATCH" "${SSH[@]}" 'bash -s' <<'EOS' 2>&1 | sed 's/^/     /'
+B=$(sudo -n dmesg 2>/dev/null | wc -l)
+sudo -n dmesg -w 2>/dev/null \
+    | stdbuf -oL tail -n +$((B + 1)) \
+    | grep --line-buffered -m20 -Ei 'usb [0-9]+-|imx219|uvc|video4linux|new (high|full|super|low)-speed|disconnect'
+EOS
     echo
-    dim "上面若 20 行内没有新事件，就是这个口物理上不通（不是驱动问题）"
+    dim "上面没有新行 = 拔插时内核毫无反应，这个口物理上就没通（不是驱动问题）"
+    dim "有 new ...-speed USB device 但没出 /dev/video* = 认到了设备、缺驱动"
 fi
