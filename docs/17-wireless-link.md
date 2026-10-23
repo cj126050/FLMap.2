@@ -357,6 +357,28 @@ sudo ip route add 239.255.0.1/32 dev wlp132s0
 | 吞吐只有几 Mbit/s | 信号弱 / 同信道干扰 | `iw dev wlan0 link` 看 signal 和 bitrate |
 | 接上雷达后掉线 | USB 供电不足（网卡+雷达抢同一个控制器） | 狗端 `lsusb -t` 看拓扑 |
 | `link_probe` 报"未关联任何 AP" | 主机在 AP 模式，`iw link` 恒为 Not connected | 看 `iw dev <if> info` 的 type，应为 AP；本节脚本已按类型分支 |
+| **热点启动失败，NM 只报 `reason 'none'`** | **监管域掉回 `country 00`（5 GHz 全 PASSIVE-SCAN，内核不许发 beacon）** | `iw reg get`；再 `iw list \| grep -F "5220 MHz [44]"` 看该行是否还在 |
+
+### 7.1 监管域为什么老是掉回 00
+
+`iw reg set CN` **只是运行时设置，不持久**，而且被覆盖有两条独立路径：
+
+1. **phy 级覆盖**：`iw list` 报的是每个 phy 自己的 regd。网卡关联到某个 AP 后，
+   该 AP 的 country IE 会盖掉全局设置 —— 现场 `VGE_1`（ch52 / 80 MHz）就把 5 GHz
+   功率从 23 dBm 压到 20 dBm，严重时 ch44 整行从 `iw list` 里消失。
+   此时脚本会**误判成"监管域限制"**，但真正该做的是先断开 STA。
+2. **重载模块**：`--reload` 卸载 rtw89 后 phy 重建，运行时设置一并清空。
+
+所以 `pc_hotspot.sh` 现在的顺序是 **先断开 STA → 再 `iw reg set CN` → 再判定信道 → 起 AP**，
+每次运行都重设一遍。想一劳永逸则在内核参数加一行（重启生效）：
+
+```bash
+sudo sed -i 's/^GRUB_CMDLINE_LINUX="/&cfg80211.ieee80211_regdom=CN /' /etc/default/grub
+sudo update-grub
+```
+
+注意：`cfg80211.ieee80211_regdom=CN` 只保证开机时是 CN，**仍会被 AP 的 country IE 覆盖**，
+所以"先断 STA"这一步不能省。
 
 ---
 

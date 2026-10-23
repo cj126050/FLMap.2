@@ -61,6 +61,9 @@ LOCAL_OK=$?
 ROUTE_IF=$(ip route get "$EDGE_HOST" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
 [ -n "$ROUTE_IF" ] && echo "  到 ${EDGE_HOST} 走: ${ROUTE_IF}"
 link_check_iface "$ROUTE_IF"
+# 这里必须留住返回码。以前只打印不判断，于是"从有线口/默认网关绕出去 ping 通"
+# 会被当成链路正常 —— 目标地址在别的网段上由无关设备应答，0% 丢包完全是假绿灯。
+IFACE_OK=$?
 
 # ---------------------------------------------------------------- 2. 连通性
 say "2. 连通性与时延（20 包）"
@@ -75,16 +78,25 @@ if echo "$PING" | grep -q "0% packet loss\|[1-9][0-9]* received"; then
     MAX=$(echo "$LINE" | awk -F'/' '{print $6}')
     MDEV=$(echo "$LINE" | awk -F'/' '{print $7}' | awk '{print $1}')
     echo "  丢包 ${LOSS:-?}%  RTT min/avg/max = ${MIN:-?}/${AVG:-?}/${MAX:-?} ms  抖动 ${MDEV:-?} ms"
-    # 本机没配地址时，100% 丢包与链路无关，别往物理层引
-    if [ "$LOCAL_OK" != "0" ]; then
-        fail "丢包 ${LOSS}% —— 根因在 §1（本机没有 ${LINK_LOCAL_PREFIX}x），配好地址再测"
+    # 三层"数字不可信"要分开说，否则用户看到 0% 丢包就以为链路是通的：
+    #   1) 回包从错误的网口绕出去的（最容易误判，实际是别的设备在应答）
+    #   2) 本机压根没配链路网段的地址
+    PING_INVALID=0
+    if [ "$IFACE_OK" != "0" ]; then
+        fail "这组数字不作数：回包不是 ${EDGE_HOST}，是从 ${ROUTE_IF:-未知出口} 绕出去被别的设备应答的"
+        echo "     目标地址在其它网段上也可能存在同名主机（本机默认路由会把它当普通外网地址转发）"
+        echo "     别据此认为狗在线；先按 §1 修地址/路由，再重跑本脚本"
+        PING_INVALID=1
+    elif [ "$LOCAL_OK" != "0" ]; then
+        fail "本机没有 ${LINK_LOCAL_PREFIX}x 地址，这组数字不可信 —— 先按 §1 配好地址再测"
     else
         awk -v l="${LOSS:-0}" 'BEGIN{exit !(l>2)}' \
             && fail "丢包 ${LOSS}% > 2% —— 查物理层：${LINK_DESC}" || pass "丢包正常"
     fi
     read -r AMAX JMAX <<< "$(link_latency_limits)"
     # ping 全丢时统计行里是 "?/?/?"，这时候再说"时延正常"是假绿灯，直接跳过。
-    if [ -n "$AVG" ] && [ -n "$MDEV" ]; then
+    # 回包来源不对时同样跳过 —— 量的是另一个设备的 RTT，判它没有意义。
+    if [ "${PING_INVALID:-0}" != "1" ] && [ -n "$AVG" ] && [ -n "$MDEV" ]; then
         awk -v a="$AVG" -v t="$AMAX" 'BEGIN{exit !(a>t)}' \
             && fail "平均 RTT ${AVG} ms > ${AMAX} ms —— 不正常，查本机负载 / 物理层" \
             || pass "时延正常"

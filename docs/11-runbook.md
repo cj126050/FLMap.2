@@ -124,6 +124,7 @@ SSID       FLMap3      密码 flmap2026
 手工等价操作（**不推荐**，监管域那步最容易漏）：
 
 ```bash
+nmcli device disconnect wlp132s0   # 必须先断开：否则 AP 的 country IE 会盖掉下面的 reg set
 sudo iw reg set CN
 sudo nmcli connection add type wifi ifname wlp132s0 con-name flmap-ap \
     autoconnect no 802-11-wireless.mode ap 802-11-wireless.band a \

@@ -109,30 +109,58 @@ else
     dim "      或买一个便携路由器做中继（FLMap.2 方案 B）"
     exit 1
 fi
-if [ "$CHAN" -ge 36 ]; then
-    if iw list 2>/dev/null | grep -q "$(printf '%s MHz \[%s\]' "$((5000 + CHAN*5))" "$CHAN")"; then
-        ok "ch$CHAN（$((5000 + CHAN*5)) MHz）可用"
-    else
-        warn "ch$CHAN 当前不可用（监管域限制）"
-    fi
+# 顺序很关键：先断开 STA，再看监管域和信道。
+# 因为 iw list 报的是「每个 phy 各自的 regd」，而网卡一旦关联到某个 AP，
+# 那个 AP 的 country IE 就会覆盖全局设置。现场 VGE_1（ch52 / 80 MHz）就会把
+# 5 GHz 功率从 23 dBm 压到 20 dBm，甚至让 ch44 整行从 iw list 里消失 ——
+# 这时脚本会误判成「监管域限制」，其实是 AP 的 IE 在起作用。
+CUR_SSID=$(iw dev "$IFACE" link 2>/dev/null | awk '/^Connected/{f=1} f&&/SSID/{print $2; exit}')
+if [ -n "$CUR_SSID" ]; then
+    nmcli device disconnect "$IFACE" >/dev/null 2>&1
+    sleep 2
+    ok "已断开原 STA 连接（$CUR_SSID）"
+    dim "开热点必然踢掉它；断开后 phy 的 regd 才会回到全局设置"
 fi
 
 # 监管域是 5 GHz AP 最常见的拦路虎：
 # country 00 时 5 GHz 整段标 PASSIVE-SCAN，内核不允许主动发 beacon，
-# wpa_supplicant 会直接报 "Failed to start AP functionality"，而 NM 只会
-# 说 "supplicant-timeout" —— 从表象完全看不出是监管域的问题。
-REG=$(iw reg get 2>/dev/null | sed -n 's/^country \([A-Z0-9]*\):.*/\1/p' | head -1)
-printf '  监管域 = %s\n' "${REG:-未知}"
-if [ "$CHAN" -ge 36 ] && { [ "$REG" = "00" ] || [ -z "$REG" ]; }; then
-    warn "country 00：5 GHz 全是 PASSIVE-SCAN，AP 起不来"
-    if iw reg set CN 2>/dev/null; then
-        sleep 1
-        REG=$(iw reg get 2>/dev/null | sed -n 's/^country \([A-Z0-9]*\):.*/\1/p' | head -1)
-        ok "已设为 CN（监管域 $REG）"
+# wpa_supplicant 报 "Failed to start AP functionality"，NM 只留下 reason 'none'。
+# 注意 iw reg set 只是「运行时」设置：重载 rtw89、或关联到别的 AP 都会被冲掉，
+# 所以每次开热点都重新设一遍，不要指望它自己保持。
+if [ "$CHAN" -ge 36 ]; then
+    REG=$(iw reg get 2>/dev/null | sed -n 's/^country \([A-Z0-9]*\):.*/\1/p' | head -1)
+    printf '  监管域 = %s\n' "${REG:-未知}"
+    if [ "$REG" != "CN" ]; then
+        if iw reg set CN 2>/dev/null; then
+            sleep 1
+            REG=$(iw reg get 2>/dev/null | sed -n 's/^country \([A-Z0-9]*\):.*/\1/p' | head -1)
+            ok "已设为 CN（监管域 $REG）"
+        else
+            bad "设置监管域失败，5 GHz AP 起不来"
+            dim "手动： sudo iw reg set CN ；或改用 2.4G： sudo $0 --chan=6"
+            dim "想一劳永逸：内核参数加 cfg80211.ieee80211_regdom=CN 后重启"
+        fi
     else
-        bad "设置监管域失败，5 GHz AP 大概率起不来"
-        dim "手动： sudo iw reg set CN"
-        dim "或改用 2.4 GHz： sudo $0 --chan=6"
+        ok "监管域已是 CN"
+    fi
+fi
+
+# 三种情况必须分开看，混成一句「监管域限制」会把人带到沟里：
+#   a) 频率行根本不存在   → phy 没把 Band 2 报全，多是固件/队列卡死，不是监管域
+#   b) 频率行带 disabled / no IR → 才是真·监管域不让发 beacon
+#   c) 有频率行且无标记   → 合法可用
+if [ "$CHAN" -ge 36 ]; then
+    FREQ=$((5000 + CHAN * 5))
+    FLINE=$(iw list 2>/dev/null | grep -F "${FREQ} MHz [${CHAN}]" | head -1)
+    if [ -z "$FLINE" ]; then
+        warn "iw list 里查不到 ch$CHAN（$FREQ MHz）"
+        dim "Band 2 没报全：可能是固件/队列卡住 → sudo $0 --reload"
+        dim "也可能是刚断开的 AP 还留着 regd 覆盖 → 等 5 秒重跑一次"
+    elif printf '%s' "$FLINE" | grep -qiE "disabled|no IR|passive"; then
+        warn "ch$CHAN 被监管域拦下：$(printf '%s' "$FLINE" | sed 's/^[[:space:]]*\*//')"
+        dim "换 ch36/40 或退回 2.4G： sudo $0 --chan=6"
+    else
+        ok "ch$CHAN（$FREQ MHz）可用：$(printf '%s' "$FLINE" | sed 's/^[[:space:]]*\*//')"
     fi
 fi
 
@@ -161,15 +189,34 @@ if timeout 90 nmcli connection up "$CON" >/dev/null 2>&1; then
     ok "热点已启动（$BAND / ch$CHAN）"
 else
     bad "热点启动失败"
-    WHY=$(journalctl -u NetworkManager -n 60 --no-pager 2>/dev/null | grep -oE "reason '[a-z-]+'|Failed to start AP functionality" | tail -1)
-    [ -n "$WHY" ] && dim "NM 报：$WHY"
-    if [ "$CHAN" -ge 36 ]; then
-        dim "5 GHz AP 起不来最常见两个原因："
-        dim "  1) 监管域还是 00 → sudo iw reg set CN && sudo $0"
-        dim "  2) 驱动不支持该信道的 AP → 退回 2.4G： sudo $0 --chan=6"
-        dim "  3) 反复启停后固件队列卡死 → sudo $0 --reload"
+    # reason 'none' 是 NM 在「不知道具体原因」时的兜底值，本身没有信息量。
+    # 真正有用的线索在它前面几行：wpa_supplicant 拒绝起 AP / dnsmasq 抢不到端口 /
+    # 固件 flush 超时。所以这里直接把过滤后的原始日志打出来。
+    WHY=$(journalctl -u NetworkManager -n 200 --no-pager 2>/dev/null \
+          | grep -iE "failed to start ap|ap functionality|supplicant|dnsmasq|deauth|reason '" \
+          | tail -8)
+    if [ -n "$WHY" ]; then
+        dim "── NM 关键日志 ──"
+        printf '%s\n' "$WHY" | sed 's/^/     /'
     else
-        dim "看详细日志： journalctl -u NetworkManager -n 40 --no-pager"
+        dim "── NM 末尾 12 行（没匹配到关键字）──"
+        journalctl -u NetworkManager -n 12 --no-pager 2>/dev/null | sed 's/^/     /'
+    fi
+    DMESG=$(dmesg 2>/dev/null | grep -iE "rtw89|firmware|flush|beacon" | tail -6)
+    if [ -n "$DMESG" ]; then
+        dim "── 驱动日志 ──"
+        printf '%s\n' "$DMESG" | sed 's/^/     /'
+    fi
+    if [ "$CHAN" -ge 36 ]; then
+        dim "按概率排的下一步："
+        dim "  1) 固件队列卡死（反复启停后最常见，日志里会有 timed out to flush queues）"
+        dim "     sudo $0 --reload"
+        dim "  2) 换个信道试（现场 ch36/40 通常空着）"
+        dim "     sudo $0 --chan=36"
+        dim "  3) 退回 2.4G（一定能起，只是带宽差）"
+        dim "     sudo $0 --chan=6"
+    else
+        dim "2.4G 也起不来，多半是驱动状态问题： sudo $0 --reload"
     fi
     exit 1
 fi
@@ -210,7 +257,8 @@ sec "4. 结果"
 ip -4 -o addr show dev "$IFACE" | awk '{printf "  %-10s %s\n", $2, $4}'
 printf '  %-10s %s\n' "SSID" "$SSID"
 printf '  %-10s %s\n' "密码" "$PASS"
-printf '  %-10s %s\n' "信道" "ch$CHAN（5 GHz）"
+if [ "$CHAN" -le 14 ]; then BANDTXT="2.4 GHz"; else BANDTXT="5 GHz"; fi
+printf '  %-10s %s\n' "信道" "ch$CHAN（$BANDTXT）"
 printf '  %-10s %s\n' "网关" "${ADDR%/*}"
 
 sec "下一步"
