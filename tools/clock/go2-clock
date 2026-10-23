@@ -16,12 +16,17 @@
 #   go2-clock restore      # 从状态文件恢复
 #   go2-clock status       # 显示状态
 #
-# 环境变量: GO2_TIME_SERVER=192.168.123.10:8000  GO2_STEP_THRESHOLD=0.01  GO2_MAX_RTT_MS=250
+# 环境变量: GO2_TIME_SERVER=192.168.123.10:8000,10.42.0.1:8000  GO2_STEP_THRESHOLD=0.01  GO2_MAX_RTT_MS=250
 
 set -u
-# 允许通过 /etc/default/go2-clock 覆盖，例如：GO2_TIME_SERVER=192.168.123.10:8000
+# 允许通过 /etc/default/go2-clock 覆盖。
+# 可以写多个候选地址，用逗号或空格分隔，pull 时按顺序试，第一个能应答的就校时。
+# 同一个狗要同时服务两个包：有线包 PC 是 192.168.123.10，无线包 PC 是 10.42.0.1。
+# 只配一个地址的结果是——换包之后静默不校时，日志里只有一行"不可达"，
+# 表现成 RViz 满屏 Message Filter dropping，很难联想到时钟。
 [ -f /etc/default/go2-clock ] && . /etc/default/go2-clock
-SERVER="${GO2_TIME_SERVER:-192.168.123.10:8000}"
+SERVER_LIST="${GO2_TIME_SERVER:-192.168.123.10:8000,10.42.0.1:8000}"
+SERVER="${SERVER_LIST%%,*}"   # 单值场景（status 等）取第一个
 STATE_DIR="/var/lib/go2-clock"
 STATE="$STATE_DIR/state"
 LOG_TAG="go2-clock"
@@ -173,8 +178,11 @@ do_status() {
   echo "RTC      : $( (hwclock -r 2>/dev/null || hwclock -r -f /dev/rtc0 2>/dev/null) || echo '读取失败（无电池，属正常）')"
   echo "NTP 服务 : timesyncd=$(systemctl is-active systemd-timesyncd 2>/dev/null || echo '-')  go2-clock-pull.timer=$(systemctl is-active go2-clock-pull.timer 2>/dev/null || echo '-')"
   echo "状态文件 : $([ -f "$STATE" ] && echo "$(head -1 "$STATE")  ($(sed -n 2p "$STATE"))" || echo '不存在')"
-  local out
-  out=$(python3 - "$SERVER" <<'PY' 2>/dev/null
+  # 逐个候选地址试；只报第一个地址会在无线/有线之间切换后给出"不可达"的假结论
+  local out="" _OLD_IFS=$IFS _srv
+  IFS=', '
+  for _srv in $SERVER_LIST; do
+    out=$(python3 - "$_srv" <<'PY' 2>/dev/null
 import sys, time, urllib.request
 server = sys.argv[1]
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -194,10 +202,13 @@ for _ in range(3):
 if best is None:
     sys.exit(1)
 rtt, true_now, off = best
-print("可达  PC=%.6f  RTT=%.1fms  偏差=%+.4fs" % (true_now, rtt * 1000, off))
+print("可达  %s  PC=%.6f  RTT=%.1fms  偏差=%+.4fs" % (server, true_now, rtt * 1000, off))
 PY
-) || { echo "PC 授时  : 不可达 ($SERVER)"; return 0; }
-  echo "PC 授时  : $out"
+) && break
+    out=""
+  done
+  IFS=$_OLD_IFS
+  [ -n "$out" ] && echo "PC 授时  : $out" || echo "PC 授时  : 不可达（已试 $SERVER_LIST）"
 }
 
 # ---------------------------------------------------------------- 入口
@@ -210,12 +221,16 @@ case "${1:-status}" in
       exec 9>"$LOCK_FILE" 2>/dev/null || true
       flock -w 10 9 2>/dev/null || true
     fi
-    do_pull
-    rc=$?
-    if [ "$rc" = "2" ]; then
-      sleep 0.3
-      do_pull || true
-    fi
+    # 逐个候选地址尝试；rc=2 表示采样期间时钟跳变，抖一下再试一次同一个地址
+    rc=1
+    _OLD_IFS=$IFS; IFS=', '
+    for _srv in $SERVER_LIST; do
+      SERVER="$_srv"
+      do_pull; rc=$?
+      if [ "$rc" = "2" ]; then sleep 0.3; do_pull; rc=$?; fi
+      [ "$rc" = "0" ] && break
+    done
+    IFS=$_OLD_IFS
     [ "$rc" = "0" ] && do_save
     exit 0
     ;;

@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================
-#  clock_sync.sh —— 有线模式下的时间基准工具（PC 侧入口）
+#  clock_sync.sh —— 时间基准工具（PC 侧入口，无线/有线通用）
 #
 #  为什么需要它
 #  ------------
@@ -8,7 +8,7 @@
 #  而 FAST-LIO2 要把 10 Hz 点云和 200 Hz IMU 融合，两端只要差到几百毫秒，
 #  PC 端 RViz 就会报 "Message Filter dropping message"，TF 全部过期。
 #
-#  有线让这件事变得便宜：RTT 只有 0.5 ms，一次 HTTP 采样就能校准到 1 ms 内。
+#  链路上 RTT 只有 1 ms 量级，一次 HTTP 采样就能校准到 1 ms 内。
 #
 #  用法
 #  ----
@@ -18,7 +18,7 @@
 #    ./scripts/clock_sync.sh stop       # 停掉 PC 侧授时服务
 #
 #  环境变量:
-#    EDGE_HOST  狗端 IP      默认 192.168.123.18
+#    EDGE_HOST  狗端 IP      由 lib_link.sh 决定（可用同名环境变量覆盖）
 #    EDGE_USER  狗端用户名    默认 unitree
 #    TIME_PORT  授时端口      默认 8000
 # =============================================================
@@ -45,9 +45,14 @@ warn(){ echo -e "${Y}[warn]${N} $*"; }
 die() { echo -e "${R}[fail]${N} $*"; exit 1; }
 dim() { echo -e "${D}       $*${N}"; }
 
-# 本机在 192.168.123.0/24 上的地址（授时服务要用它）
+# 本机在链路网段上的地址（授时服务要用它）
+# 具体地址由 lib_link.sh 的 link_pc_addr 决定（无线包 10.42.0.1 / 有线包
+# 192.168.123.10）。以前这里写死 192.168.123.x，无线包在 AP 模式下永远
+# 报"没有地址"，看起来像热点没起来，实际只是判据没跟着链路走。
 local_ip() {
-    ip -4 -o addr show | awk '$4 ~ /^192\.168\.123\./ {sub(/\/.*/,"",$4); print $4; exit}'
+    local want; want=$(link_pc_addr)
+    ip -4 -o addr show 2>/dev/null |
+        awk -v w="$want" '$4 == w || index($4, w "/") == 1 {sub(/\/.*/,"",$4); print $4; exit}'
 }
 
 # 判断 8000 上到底是不是"授时服务"，而不是只看端口有没有被占。
@@ -72,7 +77,7 @@ PY
 
 cmd_start() {
     local ip; ip=$(local_ip)
-    [ -z "$ip" ] && die "PC 上没有 192.168.123.x 的地址 —— 先按 docs/02 §3 配有线口"
+    [ -z "$ip" ] && die "PC 上没有 $(link_pc_addr) 这个地址 —— 链路没配好，先跑 ./scripts/link_probe.sh 看 §1"
     if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
         ok "授时服务已在运行 (pid $(cat "$PIDF"))"; return 0
     fi
@@ -89,7 +94,7 @@ cmd_start() {
         warn "当前端口不可用，换一个："
         local alt=$((TIME_PORT + 1))
         dim "TIME_PORT=${alt} $0 start"
-        warn "狗端也要跟着改（它默认连 192.168.123.10:8000）："
+        warn "狗端也要跟着改（它默认连 $(link_pc_addr):${TIME_PORT}）："
         dim "echo 'GO2_TIME_SERVER=${ip}:${alt}' | sudo tee /etc/default/go2-clock"
         dim "sudo systemctl restart go2-clock-pull.timer"
         die "端口 ${TIME_PORT} 不可用"
@@ -136,7 +141,7 @@ cmd_stop() {
 # 用与狗端相同的算法测偏差：3 次采样取最小 RTT，按单程补偿
 cmd_check() {
     local ip; ip=$(local_ip)
-    [ -z "$ip" ] && die "PC 上没有 192.168.123.x 的地址"
+    [ -z "$ip" ] && die "PC 上没有 $(link_pc_addr) 这个地址 —— 链路没配好"
     python3 - "$EDGE_HOST" "${EDGE_USER}" "$TIME_PORT" "$ip" <<'PY'
 import subprocess, sys, time, urllib.request
 
