@@ -118,7 +118,8 @@ FLMap.2/
     ├── 21-boot-to-scan-sop.md# ★★ PC + dog + LiDAR power-on -> scan SOP, with checkpoints
     ├── 18-local-operation.md# boot -> scan -> RViz -> bag/PCD, copy-pasteable
     ├── 19-wireless-selection.md  # why scheme C (borrow the dog's Wi-Fi) is dead
-    └── 20-imu-impact.md     # ★ a few frames tilt: IMU impact spikes (not dropouts)
+    ├── 20-imu-impact.md     # ★ a few frames tilt: IMU impact spikes (not dropouts)
+    └── 22-camera.md         # ★ live camera: MV-CS060 is USB3 Vision, MJPEG push
 ```
 
 ## Quick start

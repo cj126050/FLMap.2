@@ -241,6 +241,7 @@ python3 tools/bench_bridge.py --seconds 8
 | [18-local-operation.md](docs/18-local-operation.md) | 从开机到 PCD 回传的完整命令串（操作细节） | 现场照着敲 |
 | [20-imu-impact.md](docs/20-imu-impact.md) | 某几帧点云歪掉（坐标架被掰）的定位：IMU 冲击尖峰 | 地图局部错位 / 重影 |
 | [19-wireless-selection.md](docs/19-wireless-selection.md) | 历史选型：四条通路的成本与风险、方案 C 为何证伪 | 想知道"为什么不用狗自带 Wi-Fi" |
+| [22-camera.md](docs/22-camera.md) | ★ **相机实拍**：MV-CS060 走 USB3 Vision（非 UVC），狗端 MJPEG 推流、主机实时看画面，含 5 个实测性能坑 | **相机到手第一次出图** |
 
 ## 六、兼容性与已知限制
 
