@@ -1,0 +1,10 @@
+/livox/lidar:
+  history: keep_last
+  depth: 50
+  reliability: best_effort
+  durability: volatile
+/calib/image:
+  history: keep_last
+  depth: 10
+  reliability: reliable
+  durability: volatile
