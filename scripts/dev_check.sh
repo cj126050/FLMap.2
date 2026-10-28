@@ -197,7 +197,7 @@ set -u
 echo "IFACES|$(ip -br addr 2>/dev/null | grep -E "^eth|^en" | tr "\n" ";")"
 echo "PING|$(ping -c 3 -W 1 '"$LIDAR_IP"' >/dev/null 2>&1 && echo OK || echo FAIL)"
 echo "UDP|$(ss -lun 2>/dev/null | awk "/:56[1-5]0[0-9]/{print \$5}" | tr "\n" " ")"
-echo "PROC|$(pgrep -af "livox_ros_driver2" 2>/dev/null | head -2 | tr "\n" ";")"
+echo "PROC|$(P="livox_ros_dri""ver2"; pgrep -af "$P" 2>/dev/null | grep -v "bash -c" | head -2 | tr "\n" ";")"
 echo "LINK|$(for n in $(ls /sys/class/net | grep -E "^eth|^en"); do echo -n "$n:$(cat /sys/class/net/$n/carrier 2>/dev/null)@$(cat /sys/class/net/$n/speed 2>/dev/null)M "; done)"
 echo "END"
 '
