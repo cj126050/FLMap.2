@@ -62,6 +62,10 @@ for _ in range(3):
         best = (rtt, t1, srv)
 
 if best is None:
+    # 不打印的话外面完全看不出失败原因；再叠上下面那个 exit 0，
+    # 表现就是「pull 了一下、什么都没说、时间没变」
+    print("[go2-clock] 连不上 %s，3 次尝试均失败" % url)
+    print("[go2-clock] 检查：PC 的授时服务起没起、狗到 PC 这条路通不通")
     sys.exit(1)
 
 rtt, t_recv, srv = best
@@ -232,7 +236,9 @@ case "${1:-status}" in
     done
     IFS=$_OLD_IFS
     [ "$rc" = "0" ] && do_save
-    exit 0
+    # 别写死 exit 0：所有候选都失败时也要让 systemd 和调用方看到，
+    # 否则定时器永远显示 active，时钟慢两天都没人发现
+    exit "$rc"
     ;;
   set)     do_set "${2:-}" ;;
   save)    do_save ;;
