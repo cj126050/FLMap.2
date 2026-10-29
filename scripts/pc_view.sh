@@ -96,9 +96,18 @@ say "等待狗端的 /flmap/cloud（最多 10 秒）…"
 # 首次发现端点偶尔要好几秒，超时被杀就当成了"没数据"（实测有过一次明明在发点云却报空）。
 # 换成 `echo --once`：收到一条立刻退出，不用等率统计，也不受发现延迟叠加影响。
 probe_cloud() {
-    local rel="$1"
-    timeout 10 ros2 topic echo /flmap/cloud --once --field width \
-        --qos-reliability "$rel" 2>/dev/null | head -1
+    local rel="$1" out
+    out="$(timeout 10 ros2 topic echo /flmap/cloud --once --field width \
+        --qos-reliability "$rel" 2>/dev/null | head -1)"
+    # ros2 CLI 在拿不到消息时会把 "WARNING: topic ... does not appear to be
+    # published yet" 打到 **stdout**（不是 stderr），2>/dev/null 拦不住。
+    # 不过滤的话这行字会被当成点数，于是明明没数据却报“收到点云”——
+    # 实测就出现过 `收到点云，当前帧 WARNING: ... 点` 这种自相矛盾的输出。
+    # 只认纯数字，其余一律当没收到。
+    case "$out" in
+        ''|*[!0-9]*) return 0 ;;
+        *) printf '%s\n' "$out" ;;
+    esac
 }
 W="$(probe_cloud reliable)"
 [ -z "$W" ] && W="$(probe_cloud best_effort)"
@@ -116,6 +125,8 @@ else
     warn "  2) 两边 ROS_DOMAIN_ID 不一致（本脚本用 ${ROS_DOMAIN_ID}）"
     warn "  3) 两边 RMW 不一致（本脚本用 ${RMW_IMPLEMENTATION}）"
     warn "  4) 本机网卡选错（多网卡时 CycloneDDS 可能绑错），跑 ./scripts/link_probe.sh 看详情"
+    warn "  5) 本轮热点/SSID 重建过，但狗端节点是重建之前起的 —— DDS 的 socket 还绑在旧连接上，"
+    warn "     进程看着活着却发不出去。判据：狗端 bridge.log 仍在刷 10 Hz 却收不到，就必须重启狗端节点。"
 fi
 
 # ---- 3. RViz 的 GL 准备 ----

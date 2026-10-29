@@ -17,6 +17,7 @@
 | PC 端内存一直涨 | [§6](#6-pc-端内存一直涨) |
 | 时间戳相关报错 | [§7](#7-时间戳报错) |
 | 狗端起不来 / 编译失败 | [§8](#8-狗端编译与启动失败) |
+| **说有数据却始终没有点云（`install` 里的 `.so` 是空壳）** | [§8.5](#85-fast-lio2-秒退install-里的-so-是-0-字节) |
 | **有线口有链路但没 IP / 全部 ping 不通** | [§8.4](#84-有线口有链路但没-ip) |
 | **stop 后 PCD 导出失败** | [§8.3](#83-stop-后-pcd-导出失败) |
 | `quit` 后 PCD 导出失败 | [§8.3](#83-stop--quit-之后-pcd-导出失败) |
@@ -452,6 +453,68 @@ cd ~/FLMap.2 && ./scripts/pc_net_fix.sh
 人在图形界面里清理"多余连接"时，删掉它不会有任何警告，而 FLMap.3 的一切都依赖
 它里面的那一个地址。所以现在统一用名字明确的 `go2-wired`，并且：
 **不要在「设置 → 网络」里删除有线连接**，要改就改 `go2-wired` 的参数。
+
+---
+
+## 8.5 FAST-LIO2 秒退：install 里的 `.so` 是 0 字节
+
+**判据**：`start` 之后一直没有点云，横幅却写着
+
+```
+  /cloud_registered 统计还没出（LIO 刚起，通常 10 秒内就正常）
+  驱动已连上雷达；用 status 再看一次
+```
+
+随后 `quit` 报 `PCD 导出失败`。此时 `mapping.log` 里是：
+
+```
+fastlio2_mapping: error while loading shared libraries:
+  .../install/fast_lio2/lib/libpre.so: file too short
+[ERROR] [fastlio2_mapping-1]: process has died [pid 3323, exit code 127]
+```
+
+**原因**：编译中途被打断（内存不足 / Ctrl-C / ssh 断线），链接器先把目标文件
+创建出来、内容是 0 字节。`make` 只看**时间戳**，文件存在且比源码新就直接跳过，
+于是「编译报成功、产物是空壳」。`libpre.so` 依赖 `preprocess.cpp.o`，
+**那个 `.o` 也是 0 字节** —— 只补 `.so` 没用，重链接出来只有 9 KB。
+
+另一个坑：`install/` 里的 `.so` 全是**符号链接**，`ls -la` 看到的是链接自身的
+几十字节，得看 `build/` 下的实体文件。
+
+**判定（狗端，一条命令）**：
+
+```bash
+cd ~/flmap3_ws
+find build -name "*.o" -size 0                      # 有输出就是坏文件
+ls -la build/fast_lio2/*.so | awk '{print $5, $9}'  # 0 字节的 .so
+```
+
+**处置**：删掉坏的 `.o` 和空壳 `.so` 再重编。不要只 `touch` 一下 —— `make` 会
+以为已经编过。
+
+```bash
+cd ~/flmap3_ws
+rm -f build/fast_lio2/CMakeFiles/pre.dir/src/preprocess.cpp.o build/fast_lio2/libpre.so
+source /opt/ros/foxy/setup.bash
+colcon build --packages-select fast_lio2 --symlink-install --parallel-workers 1
+ls -la build/fast_lio2/libpre.so      # 应该是 100 KB 级，不是 0 也不是 9 KB
+```
+
+Orin 只有 7 GB 内存且开了 swap，`--parallel-workers 2` 编译 `preprocess.cpp`
+就可能触发 OOM —— 这正是最初把 `.o` 写成 0 字节的原因，重编时用 `1`。
+
+**为什么会被误导**：旧版 `start_nodes` 的自检只看 `driver.log` 里有没有
+`successfully set lidar attitude`，只要有就报「LIO 刚起，还没出统计」。可
+「LIO 还没收敛」和「LIO 已经死了」在 `ros2 topic hz` 看来完全一样。现在
+脚本先判进程存活，再谈统计：
+
+```bash
+pgrep -f "[f]astlio2_mapping" >/dev/null || echo "LIO 已死"
+```
+
+> `fastlio2_mapping` 有 16 个字符，超过内核 comm 的 15 字符上限，会被截断成
+> `fastlio2_mappin`，所以 **`pgrep -x` 永远匹配不到**。用 `pgrep -f`，并且把首
+> 字母写成 `[f]` 字符类，避免 pgrep 匹配到自己的命令行。
 
 ---
 

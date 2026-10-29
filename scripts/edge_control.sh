@@ -143,6 +143,18 @@ start_nodes() {
     hz=$(PYTHONUNBUFFERED=1 timeout 6 ros2 topic hz /cloud_registered 2>/dev/null | grep -m1 "average rate" || true)
     if [ -n "$hz" ]; then
         log "${G}  /cloud_registered: $hz${N}"
+    elif ! pgrep -f "[f]astlio2_mapping" >/dev/null 2>&1; then
+        # "LIO 还没收敛" 和 "LIO 已经死了" 表现一模一样：都是拿不到 hz。
+        # 以前只看 driver.log 里有没有 "successfully set lidar attitude"，
+        # 于是 install 里的 .so 坏掉、mapping 以 exit 127 秒退时，脚本照样
+        # 报"驱动已连上雷达，用 status 再看一次" —— 排查方向直接被带偏。
+        # 所以先看进程，再谈"还没出统计"。
+        log "${R}  FAST-LIO2 进程已退出 —— /cloud_registered 不会有数据${N}"
+        log "  mapping.log 末尾："
+        tail -n 6 "$LOG_DIR/mapping.log" 2>/dev/null | sed 's/^/    /'
+        log "  常见原因：install 里的 .so 被截断成 0 字节（编译中途被中断/内存不足）。"
+        log "  查: find install -name '*.so' -size 0  | 重编: colcon build --packages-select fast_lio2"
+        log "  详见 docs/06-troubleshooting.md"
     elif grep -q "successfully set lidar attitude" "$LOG_DIR/driver.log" 2>/dev/null; then
         log "${Y}  /cloud_registered 统计还没出（LIO 刚起，通常 10 秒内就正常）${N}"
         log "  驱动已连上雷达；用 status 再看一次"
