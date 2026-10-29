@@ -18,6 +18,7 @@
 | 时间戳相关报错 | [§7](#7-时间戳报错) |
 | 狗端起不来 / 编译失败 | [§8](#8-狗端编译与启动失败) |
 | **说有数据却始终没有点云（`install` 里的 `.so` 是空壳）** | [§8.5](#85-fast-lio2-秒退install-里的-so-是-0-字节) |
+| **桥还在刷 10 Hz，PC 一条点云都收不到（热点重建后）** | [§8.6](#86-节点都活着bridge-还在刷-10-hzpc-却一条点云都收不到) |
 | **有线口有链路但没 IP / 全部 ping 不通** | [§8.4](#84-有线口有链路但没-ip) |
 | **stop 后 PCD 导出失败** | [§8.3](#83-stop-后-pcd-导出失败) |
 | `quit` 后 PCD 导出失败 | [§8.3](#83-stop--quit-之后-pcd-导出失败) |
@@ -515,6 +516,79 @@ pgrep -f "[f]astlio2_mapping" >/dev/null || echo "LIO 已死"
 > `fastlio2_mapping` 有 16 个字符，超过内核 comm 的 15 字符上限，会被截断成
 > `fastlio2_mappin`，所以 **`pgrep -x` 永远匹配不到**。用 `pgrep -f`，并且把首
 > 字母写成 `[f]` 字符类，避免 pgrep 匹配到自己的命令行。
+
+---
+
+## 8.6 节点都活着、bridge 还在刷 10 Hz，PC 却一条点云都收不到
+
+这是**无线包里命中率最高**的一种，而且极容易误判成「建图挂了」或「雷达没数据」。
+
+### 症状
+
+- 狗端 `pgrep -af "fastlio2_mapping|flmap_bridge_node"` 三个进程齐全；
+- 狗端 `bridge.log` 照旧刷 `in 15058 pts -> out 5932 pts, ~7.6 Mbit/s @10.0 Hz`；
+- 狗端 `mapping.log` 一切正常（`Raw feature 14706, residual 0.0102`）；
+- **PC 端 `/flmap/cloud` 一条都收不到**，`pc_view.sh` 报「没数据」，累加器
+  `地图 0 点 | 累计接收 0 点`。
+
+### 根因：DDS 的 socket 绑在已经不存在的连接上
+
+CycloneDDS 在**节点启动那一刻**就绑定了网卡和它的 IP。之后只要这条连接被销毁重建
+（换 SSID、`pc_hotspot.sh --down` 再起、`dog_wlan_join.sh` 重连、NetworkManager
+`deactivate` + `activate`），老 socket 就指向一个不复存在的 `wlan0` 实例：
+
+- 进程不会察觉，日志不会报错，`ros2 topic hz` 在狗端本地也照常能测到；
+- 但发出去的组播包从新网卡出不去，对端永远发现不了这个 participant。
+
+**只有重启狗端节点才能恢复**，改路由、改 QoS、等一会儿都不行。
+
+### 判定：一条命令
+
+在 PC 端：
+
+```bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=42
+export CYCLONEDDS_URI=file://$HOME/dds_flmap.xml
+timeout 20 ros2 topic hz /flmap/cloud
+```
+
+- 有 `average rate` → 链路正常，问题在 RViz 侧（见 §1）。
+- 完全没有输出、或 `does not appear to be published yet` → 就是本节这种情况
+  （前提：狗端进程确实活着、bridge.log 确实在刷）。
+
+### 处置
+
+狗端重启节点即可：
+
+```bash
+ssh unitree@10.42.0.18
+cd ~/flmap3_ws && bash scripts/edge_control.sh     # 进去后 stop 再 start
+```
+
+或者手动重起（`setsid nohup` 三个节点，见 §8.5 附的命令）。
+
+### 怎么避免
+
+1. **先起热点/连上 Wi-Fi，再起狗端节点。** 顺序反了必然踩。
+2. `pc_hotspot.sh` 现在会在「下一步」里明确警告这一点。
+3. `pc_view.sh` 的失败提示里也加了这条判据，避免再往雷达/网络方向查。
+
+### 顺带修掉的误报
+
+旧 `pc_view.sh` 用 `ros2 topic echo --once --field width` 探测，但 ros2 CLI 在
+拿不到消息时会把
+
+```
+WARNING: topic [/flmap/cloud] does not appear to be published yet
+```
+
+打到 **stdout**（不是 stderr，`2>/dev/null` 拦不住），于是这行字被当成点数：
+
+```
+[ ok ] 收到点云，当前帧 WARNING: topic [/flmap/cloud] does not appear to be published yet 点，约 ? Hz
+```
+
+明明没数据却报成功，还自己打脸。现在只认纯数字，其余一律当没收到。
 
 ---
 
